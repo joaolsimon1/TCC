@@ -1,0 +1,86 @@
+---
+title: "Referências"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{=html}
+<style>
+body {
+text-align: justify}
+</style>
+```
+
+<br>
+
+- [Time series clustering of COVID-19 pandemic-related data](https://www.sciencedirect.com/science/article/pii/S2666764923000115)
+
+  - Analisaram os padrões de novos casos e mortes em 100 países. Dividiram as análises nos períodos pré e pós variante Omicron;
+
+  - Para explorar os padrões em termos de "corpo" da série temporal, utilizaram dynamic time wraping (DTW) como medida de distância, levando em conta o comprimento desigual das séries e os passos de tempo não alinhados;
+
+
+  - Utilizaram a proporção de população idosa de cada país ao analisar o resultado dos clusters de mortes;
+
+  - Como diferentes países possuem diferentes magnitudes de população, território e densidade populacional, também há significativas diferenças nas magnitudes de novos casos diários em diferentes países, sendo inapropriado comparar padrões de evolução entre países simultaneamente. Outras pesquisas utilizaram novos casos diários por 100 mil ou 1 milhão de habitantes como dados brutos para mitigar o impacto do tamanho populacional. Nesta pesquisa, para reduzir a influencia de fatores não relevantes e melhor identificar o padrão estrutural, eles padronizaram os dados normalizando ($\frac{x-\overline{x}}{s}$) os valores da série temporal de cada país;
+
+  - **Para eliminar o efeito de periodicidade volátil e outliers nos resultados dos clusters, eles suavizaram as séries utilizando a médida móvel de 7 dias;**
+
+  - Para evitar distorções excessivas ao utlizar o DTW, eles fixaram uma restrição de janela de 30 dias;
+
+  - Utilizaram clusterização hierárquica e o método de Ward de variância mínima para calcular a distância entre grupos;
+
+  - Para evitar as anomalias e incertezas associadas a um número excessivo de países e obter uma melhor visão do padrão de desenvolvimento da pandemia em cada país, eles clusterizaram primeiro apenas 30 países, e então depois aumentaram esse número para 100 para tornar os resultados mais convincentes. Nessa primeira fase, eles utilizaram duas **medidas de avaliação**, o coeficiente de silhueta (Rousseeuw, 1987) e o índice de Dunn (Dunn, 1973), com exploração da dissimilaridade intragrupos e entre grupos para avaliar o efeito da clusterização, e verificar se a escolha dos clusters foi realmente apropriada.
+  
+  - Em cada cluster, eles plotaram todas as séries temporais em uma opacidade menor, e deram um destaque maior para a média das séries do cluster. Isso facilita a visualização e as análises dos padrões de desenvolvimento de cada cluster;
+
+
+<center>
+```{r echo=FALSE}
+knitr::include_graphics("example_cluster_results.png")
+```
+</center>
+
+
+
+<br><br>
+
+
+- [Unsupervised analysis of COVID-19 pandemic evolution in brazilian states](https://www.sciencedirect.com/science/article/pii/S1877050921022845) 
+
+
+  - As séries temporais foram feitas utilizando as mortes por 100 mil habitantes em um período específico de tempo, tempo o ponto de partida no primeiro caso confirmado de cada estado. **Como os primeiros casos não ocorreram no mesmo dia, foi preciso calcular o delay entre o primeiro e o último caso confirmado.** Esse ajuste alinhou todas as séries de cada estado, avaliando a evolução em quantidade de dias, não por data.
+  
+  - Utilizou as séries de acumuladas de mortes por 100 mil habitantes;
+
+  - Utilizou K-Means com DTW como medida de similaridade.
+
+
+<br>
+
+
+- [Time-series clustering – A decade review](https://www.sciencedirect.com/science/article/pii/S0306437915000733)
+
+
+  -  The time of occurrence of patterns is not important to find similar time-series in shape. As a result, elastic methods [108,113] such as Dynamic time Warping (DTW) [114] is used for dissimilarity calculation. **Similarity in time is an especial case of similarity in shape. A research has revealed that similarity in shape is superior to metrics based on similarity in time**.
+
+  - Não há indícios de pesquisas que utilizem a medida de similaridade sobre a função de autocorrelação. O que ocorre é que existe métodos 'model-based', em que ao invés de aplicar a medida de similaridade nos dados brutos, ela é aplicada sobre outra representação da série temporal, como os parâmetros de um modelos ARMA ajustados a cada série temporal.
+  
+  - Índices de validação interna (CVI): Esse índice é utilizado para medir a eficiência de uma estrutura de agrupamento sem ter que repeitar informações externas. Na literatura, esse índice também é conhecido como **método não supervisionado**. O objetivo típico dessas funções em clusters é formalizar o objetivo de obter uma alta similiraridade intra cluster (objetos de um mesmo cluster) e baixa similaridade entre clusters (objetos de clusters diferentes)
+
+
+
+
+
+<br>
+
+- [Time-Series Clustering in R Using the dtwclust Package](https://journal.r-project.org/archive/2019/RJ-2019-023/RJ-2019-023.pdf)
+
+
+
+
+
+

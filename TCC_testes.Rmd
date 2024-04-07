@@ -1,0 +1,332 @@
+---
+title: "TCC"
+output: html_document
+date: "2024-02-21"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(zoo)
+```
+
+```{=html}
+<style>
+body{
+text-alig: justify;
+}
+</style>
+```
+
+
+- Importando o banco de dados do Wesley Cota
+
+```{r}
+# Importando os dados diarios
+dados_temporais20 <- read.csv("cases-brazil-cities-time_2020.csv")
+dados_temporais21 <- read.csv("cases-brazil-cities-time_2021.csv")
+dados_temporais22 <- read.csv("cases-brazil-cities-time_2022.csv")
+
+# Juntando os 3 anos em um unico dataset
+dados_temporais <- rbind(dados_temporais20, dados_temporais21, dados_temporais22)
+
+# Removendo do environment os anos separados para liberar memoria
+rm(dados_temporais20)
+rm(dados_temporais21)
+rm(dados_temporais22)
+
+# Removendo as linhas de TOTAIS  e os Casos sem localização definida
+dados_temporais <- dados_temporais %>% 
+                      filter(!grepl("TOTAL", city), !grepl("CASO SEM L", city))
+
+# Vamos considerar apenas municipios com +100mil habitantes (grande porte)
+
+## Para isso vamos ter que importar os dados pontuais do IBGE do censo de 2010
+dados_pontuais <- readxl::read_xlsx("Data_municipality_variables.xlsx")
+dados_pontuais <- dados_pontuais[-1,]
+
+## Vetor contendo apenas o código dos municipios com +100 habitantes
+muni_grande_porte <- dados_pontuais %>% filter(Population > 100000) %>% select(Codmun6)
+dados_temporais$ibgeID <- substr(dados_temporais$ibgeID, 1, 6) # removendo o ultimo digito do codigo do IBGE
+
+# Separando outro dataset apenas com os municipios que em 2010 tinham pop. > 100k habitantes
+dados_temporais2 <- dados_temporais %>% filter(ibgeID %in% muni_grande_porte$Codmun6)
+```
+
+
+```{r}
+# Separando a série temporal de novos casos de SP
+serie_temporal <- dados_temporais2[dados_temporais2$city == "São Paulo/SP", "newCases"]
+
+# Normalizando os dados da serie temporal para deixar as cidades padronizadas
+media <- mean(serie_temporal)
+desvio_padrao <- sd(serie_temporal)
+serie_padronizada <- (serie_temporal - media) / desvio_padrao
+
+plot.ts(dados_temporais2[dados_temporais2$city == "São Paulo/SP", "newCases"])
+plot.ts(serie_padronizada)
+```
+
+
+```{r}
+
+# Calcular a média móvel de 7 dias
+media_movel <- rollmean(serie_padronizada, k = 14, fill = NA)
+
+# Criar um data frame para ggplot
+df <- data.frame(Dias = seq_along(serie_padronizada),
+                 Valor = serie_padronizada,
+                 Media_Movel = media_movel)
+
+# Criar o gráfico usando ggplot
+ggplot(df, aes(x = Dias)) +
+  geom_line(aes(y = Valor), color = "#378FC8") +  # Série temporal original
+  geom_line(aes(y = Media_Movel), color = "#010401", size = 1) +  # Média móvel de 7 dias
+  labs(x = "Dias", y = "Valor", title = "São Paulo/SP - Média Móvel de 7 dias de Novos Casos") +
+  ylim(c(-1,3)) +
+  theme_minimal()
+```
+
+
+
+```{r}
+# Fazendo um dataframe apenas com as séries padronizadas padronizadas
+dados_padronizados <- dados_temporais2
+
+for (i in unique(dados_temporais2$city)) {
+  serie_temporal <- dados_temporais2[dados_temporais2$city == i, "newCases"]
+
+  # Normalizando os dados da serie temporal para deixar as cidades padronizadas
+  media <- mean(serie_temporal)
+  desvio_padrao <- sd(serie_temporal)
+  serie_padronizada <- (serie_temporal - media) / desvio_padrao
+
+  dados_padronizados[dados_padronizados$city == i, "newCases"] <- serie_padronizada
+}
+
+dados_padronizados_SMA <- NULL
+# Fazendo um dataframe apenas com as médias móveis das séries padronizadas
+for (i in unique(dados_temporais2$city)) {
+  serie <- dados_padronizados[dados_padronizados$city == i,]
+  media_movel <- rollmean(serie$newCases, k = 14, fill = NA)
+  
+  dados_padronizados_SMA <- rbind(dados_padronizados_SMA, 
+                                  dados_padronizados[dados_padronizados$city == i,])
+  
+  dados_padronizados_SMA[dados_padronizados_SMA$city == i, "newCases"] <- media_movel
+}
+
+plot.ts(dados_padronizados[dados_padronizados$city == "São Paulo/SP", "newCases"])
+plot.ts(dados_padronizados_SMA[dados_padronizados_SMA$city == "Santo Antônio de Juses/BA", "newCases"])
+```
+
+
+
+```{r}
+aux1 <- dados_padronizados_SMA[dados_padronizados_SMA$city == "Santo Antônio de Jesus/BA", "newCases"]
+
+n_obs <- NULL
+for (i in unique(dados_padronizados_SMA$city)) {
+  aux1 <- dados_padronizados_SMA[dados_padronizados_SMA$city == i, "newCases"]
+  n_obs <- c(n_obs, length(aux1))
+  # if (length(aux1) < 900) {
+  #   print(length(aux1))
+  # }
+}
+
+summary(n_obs)  
+```
+Pelo resultado acima, como o tamanho minimo de observações foram 974, iremos pegar apenas as primeiras 974 observações de todos os municípios a fim de comparabilidade.
+
+
+
+```{r}
+# df_final <- matrix(NA)
+# for (i in unique(dados_padronizados_SMA$city)) {
+#   aux1 <- dados_padronizados_SMA[dados_padronizados_SMA$city == i, "newCases"]
+#   df_final <- rbind(df_final, aux1)
+# }
+lista_de_vetores <- list()
+
+# Iterar sobre os valores únicos de "city"
+for (i in unique(dados_padronizados_SMA$city)) {
+  # Selecionar os valores da coluna "newCases" correspondentes à cidade atual
+  aux1 <- dados_padronizados_SMA[dados_padronizados_SMA$city == i, "newCases"]
+  
+  # Adicionar o vetor numérico à lista
+  lista_de_vetores[[i]] <- aux1
+}
+
+# Combine os vetores numéricos em um data frame
+df_final <- as.data.frame(do.call(rbind, lista_de_vetores))
+```
+
+O dataframe final acima possui as séries temporais começando de uma mesmo ponto, ou seja, o eixo X nao representa mais as datas e sim os "dias a partir do primeiro caso de infecção".
+
+
+
+```{r}
+library(uclust)
+df_final <- df_final[, c(7:967)] #removendo todos os NA's
+df_final <- as.matrix(df_final)
+agrupamento1 <- uhclust(df_final) # a amostra foi homogenea
+```
+
+
+```{r}
+df_final2 <- dados_padronizados_SMA %>%
+                select(date, city, newCases) %>% 
+                pivot_wider(names_from = date, values_from = newCases, values_fill = 0)
+
+rownames(df_final2) <- df_final2$city
+df_final2 <- as.matrix(df_final2[,-1])
+df_final2[is.na(df_final2)] <- 0
+
+
+
+agrupamento2 <- uhclust(df_final2)
+```
+
+
+
+# Por 100k Habitantes
+
+```{r}
+dados_100k <- dados_temporais2
+rm(dados_100k)
+for (i in unique(dados_temporais2$city)) {
+  serie_temporal <- dados_temporais2[dados_temporais2$city == i, "totalCases_per_100k_inhabitants"]
+
+  serie_temporal <- diff(serie_temporal, lag = 1)
+  
+  # Substituir os dados padronizados de volta no data frame original
+  #dados_semanais_pd[dados_semanais_pd$city == i, "newCases"] <- serie_temporal
+  dados_100k$newCases_100k[dados_100k$city == i] <- serie_temporal
+
+  #dados_semanais_pd <- dados_semanais %>% mutate(ifelse(city == i, serie_temporal$newCases, newCases))
+}
+lista_de_vetores <- list()
+
+# Iterar sobre os valores únicos de "city"
+for (i in unique(dados_temporais2$city)) {
+  # Selecionar os valores da coluna "newCases" correspondentes à cidade atual
+  aux1 <- dados_temporais2[dados_temporais2$city == i, "totalCases_per_100k_inhabitants"]
+  aux1 <- diff(aux1, lag = 1)
+  # Adicionar o vetor numérico à lista
+  lista_de_vetores[[i]] <- aux1
+}
+
+
+# Combine os vetores numéricos em um data frame
+df_final3 <- as.data.frame(do.call(rbind, lista_de_vetores))
+df_final3 <- as.matrix(df_final3)
+
+agrupamento3 <- uhclust(df_final3)
+
+
+plot.ts(df_final3[1,])
+# Dados reorganizados
+dados_semanais_reorganizados <- dados_semanais_pd %>%
+  pivot_wider(names_from = epi_week, values_from = newCases, values_fill = 0)
+```
+
+
+
+
+# Por SEMANA EPIDEMIOLÓGICA
+
+```{r}
+dados_semanais <- dados_temporais2 %>% 
+                          group_by(epi_week, city) %>% 
+                          summarise("newCases" = sum(newCases))
+
+
+# Separando a série temporal de novos casos de SP
+serie_semanal <- dados_semanais[dados_semanais$city == "São Leopoldo/RS", "newCases"]
+
+# Normalizando os dados da serie temporal para deixar as cidades padronizadas
+media <- mean(serie_semanal$newCases)
+desvio_padrao <- sd(serie_semanal$newCases)
+serie_semanal_padronizada <- (serie_semanal$newCases - media) / desvio_padrao
+
+
+
+plot.ts(serie_semanal_padronizada)
+
+#dados_temporais2[dados_temporais2$city == "São Félix do Xingu/PA",]
+```
+
+
+
+```{r}
+dados_semanais_pd <- dados_semanais
+for (i in unique(dados_semanais$city)) {
+  serie_temporal <- dados_semanais[dados_semanais$city == i, "newCases"]
+
+  # Normalizando os dados da serie temporal para deixar as cidades padronizadas
+  media <- mean(serie_temporal$newCases)
+  desvio_padrao <- sd(serie_temporal$newCases)
+  serie_temporal$newCases <- (serie_temporal$newCases - media) / desvio_padrao
+  
+  # Substituir os dados padronizados de volta no data frame original
+  #dados_semanais_pd[dados_semanais_pd$city == i, "newCases"] <- serie_temporal
+  dados_semanais_pd$newCases[dados_semanais_pd$city == i] <- serie_temporal$newCases
+
+  #dados_semanais_pd <- dados_semanais %>% mutate(ifelse(city == i, serie_temporal$newCases, newCases))
+}
+
+
+# Dados reorganizados
+dados_semanais_reorganizados <- dados_semanais_pd %>%
+  pivot_wider(names_from = epi_week, values_from = newCases, values_fill = 0)
+
+
+df_final3 <- as.matrix(dados_semanais_reorganizados[,c(2:150)])
+rownames(df_final2) <- dados_semanais_reorganizados$city
+
+#agrupamento3 <- uhclust(df_final3)
+```
+
+
+
+# DTW
+
+```{r}
+library(dtwclust)
+
+
+```
+
+
+```{r}
+cluster_assignments <- tsclust(df_final3, k = 2L:10L, seed = 8L, distance = "dtw_basic", centroid = "dba", norm = "L2", window.size = 20L)
+
+
+sapply(cluster_assignments, cvi, type = "internal")
+
+cluster_assignments$cluster
+
+
+names(cluster_assignments) <- paste0("k_",2L:10L)
+
+
+
+result <- tsclust(df_final3, k = 4L, seed = 8L, distance = "dtw_basic", centroid = "dba", norm = "L2", window.size = 20L)
+plot(result)  # Plot density of clusters
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+

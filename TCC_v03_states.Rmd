@@ -1,0 +1,248 @@
+---
+title: "TCC"
+output:
+  html_document:
+    code_download: true
+    theme: flatly
+    toc: true
+    toc_depth: 3
+    toc_float:
+      collapsed: true
+      smooth_scroll: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = F, message = F)
+library(tidyverse)
+library(zoo)
+library(dtwclust)
+library(caret)
+```
+
+```{=html}
+<style>
+body{
+text-alig: justify;
+}
+</style>
+```
+
+<br>
+
+# Resumo
+
+<br>
+
+As análises feitas abaixo seguem tendo como base a metodoliga aplicada em [Time series clustering of COVID-19 pandemic-related data](https://www.sciencedirect.com/science/article/pii/S2666764923000115). Nela, o pesquisador seguiu os seguintes passos:
+
+  - Obteve as séries temporais de casos diários em todos os países;
+
+  - Normalizou todas as séries;
+
+  - Ao invés de utilizar a série bruta normalizada, utilizou a média móvel centrada de 7 dias de cada país;
+
+  - Selecionou o algoritmo DTW Barycenter para formar os clusters;
+
+  - Utilizou o método não hierárquico para definir a quantidade de clusters;
+
+  - Avaliou os cluster atráves de alguns Índices de Validação de Clusters (CVI); (Coeficiente da Silhueta e Índice de Dunn)
+
+  - Como resultado final, pegou a média móvel de cada cluster e fez uma análise do comportamento da série e de alguns países que faziam parte do grupo formado;
+
+<br>
+
+Neste trabalho, foi seguida a seguinte medologia:
+
+  - Foram obtidas as séries **semanais** de casos diários em todos os **estados do Brasil** ($N=27$).
+
+  - Normalizamos todas as séries temporais; 
+  
+  $$z_{it}=\frac{x_{it}-\overline{x_{i}}}{s_i}; (t=1,2,..,T; i=1,2,..,n)$$ 
+
+  - Aplicamos o algoritmo **DTW Barycenter** nas séries, utilizando o **método de Ward** para a formação dos clusters de forma hierarquica;
+  
+ 
+
+# O que é Dynamic Time Warping?
+
+A técnica permite que você descubra como alinhar dois sinais que podem ser de durações diferentes. Ela basicamente lhe devolve duas coisas:
+
+  - Quais pontos em um dos sinais correspondem aos pontos do outro sinal;
+
+  - O quanto dois sinais são similares entre si;
+  
+  O DTW é um algoritmo que basicamente nos diz como alinhar dois sinais de durações diferentes.
+  
+  
+```{r echo=FALSE, fig.align='center'}
+knitr::include_graphics("Euclidean_vs_DTW.jpg")
+```
+
+
+
+<br>
+
+# Importando o banco de dados do Wesley Cota
+
+```{r}
+# Importando os dados diarios
+dados_temporais <- read.csv("cases-brazil-states.csv")
+
+
+# Removendo as linhas de TOTAIS  e os Casos sem localização definida
+dados_temporais <- dados_temporais %>% 
+                      filter(!grepl("TOTAL", state), !grepl("CASO SEM L", state))
+
+
+#load("TCC_v01.RData")
+```
+
+
+
+# Por SEMANA EPIDEMIOLÓGICA
+
+```{r fig.align='center'}
+dados_semanais <- dados_temporais %>% 
+                          group_by(epi_week, state) %>% 
+                          summarise("newCases" = sum(newCases))
+
+
+# Separando a série temporal de novos casos de SP
+serie_semanal <- dados_semanais[dados_semanais$state == "GO", "newCases"]
+
+# Normalizando os dados da serie temporal para deixar as cidades padronizadas
+media <- mean(serie_semanal$newCases)
+desvio_padrao <- sd(serie_semanal$newCases)
+serie_semanal_padronizada <- (serie_semanal$newCases - media) / desvio_padrao
+
+
+
+plot.ts(serie_semanal_padronizada)
+
+#dados_temporais2[dados_temporais2$city == "São Félix do Xingu/PA",]
+```
+
+
+
+```{r fig.align='center'}
+dados_semanais_pd <- dados_semanais
+for (i in unique(dados_semanais$state)) {
+  serie_temporal <- dados_semanais[dados_semanais$state == i, "newCases"]
+
+  # Normalizando os dados da serie temporal para deixar as cidades padronizadas
+  media <- mean(serie_temporal$newCases)
+  desvio_padrao <- sd(serie_temporal$newCases)
+  serie_temporal$newCases <- (serie_temporal$newCases - media) / desvio_padrao
+  
+  # Substituir os dados padronizados de volta no data frame original
+  #dados_semanais_pd[dados_semanais_pd$state == i, "newCases"] <- serie_temporal
+  dados_semanais_pd$newCases[dados_semanais_pd$state == i] <- serie_temporal$newCases
+
+  #dados_semanais_pd <- dados_semanais %>% mutate(ifelse(state == i, serie_temporal$newCases, newCases))
+}
+
+
+# Dados reorganizados
+dados_semanais_reorganizados <- dados_semanais_pd %>%
+  pivot_wider(names_from = epi_week, values_from = newCases, values_fill = 0)
+
+
+df_final3 <- as.matrix(dados_semanais_reorganizados[,c(2:150)])
+rownames(df_final3) <- dados_semanais_reorganizados$state
+#agrupamento3 <- uhclust(df_final3)
+```
+
+<br>
+
+# DTW
+
+```{r fig.align='center'}
+## Rodando a clusterização com DTW Barycenter com K=(2,3,4,..,10)
+# cluster_assignments <- tsclust(df_final3, k = 2L:10L, seed = 8L, distance = "dtw_basic", centroid = "dba", norm = "L2", window.size = 5L)
+
+
+# Compute the dissimilarity matrix using DTW
+# dist_matrix <- proxy::dist(df_final3, method = "DTW")
+# 
+# 
+#  tsclust(series, type = "h", k = 4L, distance = "L2", trace = TRUE, control = hierarchical_control(method = diana))
+# 
+# 
+# cluster_assignments <- tsclust(df_final3, k = 2L:10L, seed = 8L, distance = "dtw_basic", centroid = "dba")
+
+
+cluster_assignments <- tsclust(df_final3,
+        type = "h", 
+        distance = "dtw",
+        centroid = "dba",
+        control = hierarchical_control(method = 'ward.D'))
+
+
+par(mfrow = c(2,2))
+for (i in 3:8) {
+  # Subset the time series for this cluster
+ plot(cluster_assignments, cex = .6, main=paste0('K=',i))
+
+  rect.hclust(cluster_assignments, border ="red", k=i) 
+  
+  # Add the mean time series with a thicker line
+  #lines(mean_ts, lwd = 2, col = "red")
+}
+
+## Aplicando CVI 
+#validacao_n_clusters <- sapply(cluster_assignments, cvi, type = "internal")
+
+#validacao_n_clusters
+```
+
+<br>
+
+
+
+
+```{r}
+cluster_assignments <- tsclust(df_final3,
+                               k=3:8,
+                               type = "h", 
+                               distance = "dtw",
+                               centroid = "dba",
+                               control = hierarchical_control(method = 'ward.D'))
+
+
+validacao_n_clusters <- sapply(cluster_assignments, cvi, type = "internal")
+
+
+validacao_n_clusters
+```
+
+<br>
+
+# K=4
+
+```{r}
+cluster_assignments <- tsclust(df_final3,
+                               k=4,
+                               type = "h", 
+                               distance = "dtw",
+                               centroid = "dba",
+                               control = hierarchical_control(method = 'ward.D'))
+
+clusters <- cluster_assignments@cluster
+
+par(mfrow = c(2,2))
+for (i in 1:4) {
+  # Subset the time series for this cluster
+  cluster_ts <- as.data.frame(df_final3[clusters == i, ])
+  
+  # Plot the time series
+  matplot(t(cluster_ts), type = "l", main = paste("Cluster", i), lty = 1, lwd = 1)
+  
+  # Calculate the mean of the time series for this cluster
+  mean_ts <- colMeans(cluster_ts, na.rm = TRUE)
+  # Add the mean time series with a thicker line
+  lines(mean_ts, lwd = 3, col = "black")
+}
+```
+
+
+
