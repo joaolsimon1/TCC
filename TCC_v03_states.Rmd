@@ -6,17 +6,19 @@ output:
     theme: flatly
     toc: true
     toc_depth: 3
+    code_folding: hide
     toc_float:
       collapsed: true
       smooth_scroll: true
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, warning = F, message = F)
+knitr::opts_chunk$set(echo = TRUE, warning = F, message = F, error = TRUE)
 library(tidyverse)
 library(zoo)
 library(dtwclust)
 library(caret)
+library(gridExtra)
 ```
 
 ```{=html}
@@ -86,7 +88,7 @@ knitr::include_graphics("Euclidean_vs_DTW.jpg")
 
 ```{r}
 # Importando os dados diarios
-dados_temporais <- read.csv("cases-brazil-states.csv")
+dados_temporais <- read.csv("cases-brazil-states.csv", sep = ";")
 
 
 # Removendo as linhas de TOTAIS  e os Casos sem localização definida
@@ -148,6 +150,8 @@ dados_semanais_reorganizados <- dados_semanais_pd %>%
 
 
 df_final3 <- as.matrix(dados_semanais_reorganizados[,c(2:150)])
+#df_final3 <- as.data.frame(cbind(dados_semanais_reorganizados$state, df_final3))
+#colnames(df_final3)[1] <- "estado"
 rownames(df_final3) <- dados_semanais_reorganizados$state
 #agrupamento3 <- uhclust(df_final3)
 ```
@@ -158,7 +162,7 @@ rownames(df_final3) <- dados_semanais_reorganizados$state
 
 ```{r fig.align='center'}
 ## Rodando a clusterização com DTW Barycenter com K=(2,3,4,..,10)
-# cluster_assignments <- tsclust(df_final3, k = 2L:10L, seed = 8L, distance = "dtw_basic", centroid = "dba", norm = "L2", window.size = 5L)
+# cluster_assignments <- tsclust(df_final3, k = 2L:10L, seed = 8L, distance = "dtw_basic", centroid = dba, norm = "L2", window.size = 5L)
 
 
 # Compute the dissimilarity matrix using DTW
@@ -168,26 +172,41 @@ rownames(df_final3) <- dados_semanais_reorganizados$state
 #  tsclust(series, type = "h", k = 4L, distance = "L2", trace = TRUE, control = hierarchical_control(method = diana))
 # 
 # 
-# cluster_assignments <- tsclust(df_final3, k = 2L:10L, seed = 8L, distance = "dtw_basic", centroid = "dba")
-
+# cluster_assignments <- tsclust(df_final3, k = 2L:10L, seed = 8L, distance = "dtw_basic", centroid = dba)
+library(dendextend)
 
 cluster_assignments <- tsclust(df_final3,
         type = "h", 
         distance = "dtw",
-        centroid = "dba",
+        centroid = dba,
+        window = 20L,
         control = hierarchical_control(method = 'ward.D'))
 
+dend <- as.dendrogram(cluster_assignments)
 
-par(mfrow = c(2,2))
+# Personalize as cores dos clusters e dos ramos
+
+
+#par(mfrow = c(2,2))
 for (i in 3:8) {
-  # Subset the time series for this cluster
- plot(cluster_assignments, cex = .6, main=paste0('K=',i))
+  #plot(cluster_assignments, cex = .8, main=paste0('K=',i))
 
-  rect.hclust(cluster_assignments, border ="red", k=i) 
+  #rect.hclust(cluster_assignments, border ="red", k=i) 
   
   # Add the mean time series with a thicker line
   #lines(mean_ts, lwd = 2, col = "red")
+ 
+cores <- c("#6FACF2", "#DEF26F", "#F27A6F", "#8B4196", "#7D8C9D", "#989D7D", "#736260","#313C48")
+     
+dend %>%
+  #set("labels_col", value = cores, k=i) %>%
+  set("branches_k_color", value = cores, k = i) %>%
+  plot(axes=TRUE)
+
+#rect.dendrogram( dend, k=i, lty = 5, lwd = 0, x=1, col=rgb(0.1, 0.2, 0.4, 0.1) ) 
+  
 }
+
 
 ## Aplicando CVI 
 #validacao_n_clusters <- sapply(cluster_assignments, cvi, type = "internal")
@@ -205,15 +224,122 @@ cluster_assignments <- tsclust(df_final3,
                                k=3:8,
                                type = "h", 
                                distance = "dtw",
-                               centroid = "dba",
+                               centroid = dba,
+                               window = 20L,
                                control = hierarchical_control(method = 'ward.D'))
-
 
 validacao_n_clusters <- sapply(cluster_assignments, cvi, type = "internal")
 
-
 validacao_n_clusters
 ```
+
+<br>
+
+# K=3
+
+```{r}
+cluster_assignments <- tsclust(df_final3,
+                               k=3,
+                               type = "h", 
+                               distance = "dtw",
+                               centroid = dba,
+                               control = hierarchical_control(method = 'ward.D'))
+
+clusters <- cluster_assignments@cluster
+#library(plotly)
+
+df_final4 <- df_final3
+df_final4 <- as.data.frame(df_final4)
+
+df_final4$cluster <- clusters
+
+plots <- list()
+i=1
+for (i in 1:3) {
+  #df_final3 <- df_final3[,-1]
+  # Subset the time series for this cluster
+  cluster_ts <- as.data.frame(df_final4[df_final4$cluster == i, ])
+  
+  #cluster_ts <- cluster_ts[,-1]
+  
+  cluster_ts <- cluster_ts %>%
+                  mutate_all(as.numeric)
+  
+  # Plot the time series
+  #matplot(t(cluster_ts), type = "l", main = paste("Cluster", i), lty = 1, lwd = 1)
+  #cluster_ts <- cluster_ts[,-1]
+  #str(cluster_ts)
+  # Calculate the mean of the time series for this cluster
+  mean_ts <- colMeans(cluster_ts, na.rm = TRUE)
+  
+  cluster_ts <- rbind(cluster_ts, mean_ts)
+  
+  rownames(cluster_ts)[nrow(cluster_ts)] <- "Mean"
+
+  # Remove the "Mean" row as it's not part of the time series
+  df <- cluster_ts
+  
+  # Move row names to the first column
+  df <- rownames_to_column(df, var = "State")
+  
+ 
+  
+  # Convert the dataframe to long format
+  df_long <- gather(df, key = "Week", value = "Value", -State)
+  
+  df_long$Week <- as.numeric(df_long$Week)
+  
+  
+  dados_temporais2 <- dados_temporais %>% 
+                        group_by(epi_week) %>% 
+                        summarise(date = max(date)) #-> dados_temporais2
+  
+  df_long <- left_join(df_long,
+               dados_temporais2,
+               by = c("Week" = "epi_week"))
+  
+  df_long$date <- as.Date(df_long$date, format="%d/%m/%Y")
+  
+  # Assigning unique colors to each state
+  state_colors <- setNames(rainbow(length(unique(df_long$State))), unique(df_long$State))
+
+  # Setting color for "RO" separately
+  state_colors["Mean"] <- "black"
+  
+  # Definindo a grossura de cada linha
+  state_sizes <- setNames(rep(.5, length(unique(df_long$State))), unique(df_long$State))
+
+  # Definindo a grossura para "RO" separadamente
+  state_sizes["Mean"] <- 1.1
+  
+  # Definindo a opacidade para cada estado
+  state_alphas <- setNames(rep(0.4, length(unique(df_long$State))), unique(df_long$State))
+
+  # Definindo a opacidade para "RO" separadamente
+  state_alphas["Mean"] <- 1
+  
+  #colnames(cluster_ts) <- c(9:(ncol(cluster_ts)+8))
+
+  p <- ggplot(df_long, aes(x = date, y = Value)) +
+        geom_line(aes(color = State, size = State, alpha = State)) +
+        labs(x = "Data", y = "") +
+        theme_minimal() +
+        ylim(c(-2, 8)) +
+        scale_color_manual(values = state_colors) +
+        scale_size_manual(values = state_sizes) +
+        scale_alpha_manual(values = state_alphas) +
+        theme(legend.position = "none",
+              text = element_text(family = "serif")) +
+        scale_x_date(date_labels = "%b/%Y", date_breaks = "8 month")
+  
+  plots[[i]] <- p
+  #ggplotly(p)
+}
+
+grid.arrange(grobs = plots, ncol = 2)
+```
+
+
 
 <br>
 
@@ -224,25 +350,315 @@ cluster_assignments <- tsclust(df_final3,
                                k=4,
                                type = "h", 
                                distance = "dtw",
-                               centroid = "dba",
+                               centroid = dba,
                                control = hierarchical_control(method = 'ward.D'))
 
 clusters <- cluster_assignments@cluster
-
+library(plotly)
 par(mfrow = c(2,2))
+df_final4 <- df_final3
+df_final4 <- as.data.frame(df_final4)
+
+df_final4$cluster <- clusters
+
+plots <- list()
+
 for (i in 1:4) {
+  #df_final3 <- df_final3[,-1]
   # Subset the time series for this cluster
-  cluster_ts <- as.data.frame(df_final3[clusters == i, ])
+  cluster_ts <- as.data.frame(df_final4[df_final4$cluster == i, ])
+  
+  #cluster_ts <- cluster_ts[,-1]
+  
+  cluster_ts <- cluster_ts %>%
+                  mutate_all(as.numeric)
   
   # Plot the time series
-  matplot(t(cluster_ts), type = "l", main = paste("Cluster", i), lty = 1, lwd = 1)
-  
+  #matplot(t(cluster_ts), type = "l", main = paste("Cluster", i), lty = 1, lwd = 1)
+  #cluster_ts <- cluster_ts[,-1]
+  #str(cluster_ts)
   # Calculate the mean of the time series for this cluster
   mean_ts <- colMeans(cluster_ts, na.rm = TRUE)
-  # Add the mean time series with a thicker line
-  lines(mean_ts, lwd = 3, col = "black")
+  
+  cluster_ts <- rbind(cluster_ts, mean_ts)
+  
+  rownames(cluster_ts)[nrow(cluster_ts)] <- "Mean"
+
+  # Remove the "Mean" row as it's not part of the time series
+  df <- cluster_ts
+  
+  # Move row names to the first column
+  df <- rownames_to_column(df, var = "State")
+  
+ 
+  
+  # Convert the dataframe to long format
+  df_long <- gather(df, key = "Week", value = "Value", -State)
+  
+  df_long$Week <- as.numeric(df_long$Week)
+  
+  
+  dados_temporais2 <- dados_temporais %>% 
+                        group_by(epi_week) %>% 
+                        summarise(date = max(date)) #-> dados_temporais2
+  
+  df_long <- left_join(df_long,
+               dados_temporais2,
+               by = c("Week" = "epi_week"))
+  
+  df_long$date <- as.Date(df_long$date, format="%d/%m/%Y")
+  
+  # Assigning unique colors to each state
+  state_colors <- setNames(rainbow(length(unique(df_long$State))), unique(df_long$State))
+
+  # Setting color for "RO" separately
+  state_colors["Mean"] <- "black"
+  
+  # Definindo a grossura de cada linha
+  state_sizes <- setNames(rep(.5, length(unique(df_long$State))), unique(df_long$State))
+
+  # Definindo a grossura para "RO" separadamente
+  state_sizes["Mean"] <- 1.1
+  
+  # Definindo a opacidade para cada estado
+  state_alphas <- setNames(rep(0.4, length(unique(df_long$State))), unique(df_long$State))
+
+  # Definindo a opacidade para "RO" separadamente
+  state_alphas["Mean"] <- 1
+  
+  #colnames(cluster_ts) <- c(9:(ncol(cluster_ts)+8))
+
+  p <- ggplot(df_long, aes(x = date, y = Value)) +
+        geom_line(aes(color = State, size = State, alpha = State)) +
+        labs(x = "Data", y = "") +
+        theme_minimal() +
+        ylim(c(-2, 8)) +
+        scale_color_manual(values = state_colors) +
+        scale_size_manual(values = state_sizes) +
+        scale_alpha_manual(values = state_alphas) +
+        theme(legend.position = "none",
+              text = element_text(family = "serif")) +
+        scale_x_date(date_labels = "%b/%Y", date_breaks = "8 month")
+  
+  plots[[i]] <- p
+  #ggplotly(p)
 }
+
+grid.arrange(grobs = plots, ncol = 2)
 ```
 
+<br>
 
+# K=5
+
+```{r}
+cluster_assignments <- tsclust(df_final3,
+                               k=5,
+                               type = "h", 
+                               distance = "dtw",
+                               centroid = dba,
+                               control = hierarchical_control(method = 'ward.D'))
+
+clusters <- cluster_assignments@cluster
+library(plotly)
+
+par(mfrow = c(2,3))
+df_final4 <- df_final3
+df_final4 <- as.data.frame(df_final4)
+
+df_final4$cluster <- clusters
+
+plots <- list()
+
+for (i in 1:5) {
+  #df_final3 <- df_final3[,-1]
+  # Subset the time series for this cluster
+  cluster_ts <- as.data.frame(df_final4[df_final4$cluster == i, ])
+  
+  #cluster_ts <- cluster_ts[,-1]
+  
+  cluster_ts <- cluster_ts %>%
+                  mutate_all(as.numeric)
+  
+  # Plot the time series
+  #matplot(t(cluster_ts), type = "l", main = paste("Cluster", i), lty = 1, lwd = 1)
+  #cluster_ts <- cluster_ts[,-1]
+  #str(cluster_ts)
+  # Calculate the mean of the time series for this cluster
+  mean_ts <- colMeans(cluster_ts, na.rm = TRUE)
+  
+  cluster_ts <- rbind(cluster_ts, mean_ts)
+  
+  rownames(cluster_ts)[nrow(cluster_ts)] <- "Mean"
+
+  # Remove the "Mean" row as it's not part of the time series
+  df <- cluster_ts
+  
+  # Move row names to the first column
+  df <- rownames_to_column(df, var = "State")
+  
+ 
+  
+  # Convert the dataframe to long format
+  df_long <- gather(df, key = "Week", value = "Value", -State)
+  
+  df_long$Week <- as.numeric(df_long$Week)
+  
+  
+  dados_temporais2 <- dados_temporais %>% 
+                        group_by(epi_week) %>% 
+                        summarise(date = max(date)) #-> dados_temporais2
+  
+  df_long <- left_join(df_long,
+               dados_temporais2,
+               by = c("Week" = "epi_week"))
+  
+  df_long$date <- as.Date(df_long$date, format="%d/%m/%Y")
+  
+  # Assigning unique colors to each state
+  state_colors <- setNames(rainbow(length(unique(df_long$State))), unique(df_long$State))
+
+  # Setting color for "RO" separately
+  state_colors["Mean"] <- "black"
+  
+  # Definindo a grossura de cada linha
+  state_sizes <- setNames(rep(.5, length(unique(df_long$State))), unique(df_long$State))
+
+  # Definindo a grossura para "RO" separadamente
+  state_sizes["Mean"] <- 1.1
+  
+  # Definindo a opacidade para cada estado
+  state_alphas <- setNames(rep(0.4, length(unique(df_long$State))), unique(df_long$State))
+
+  # Definindo a opacidade para "RO" separadamente
+  state_alphas["Mean"] <- 1
+  
+  #colnames(cluster_ts) <- c(9:(ncol(cluster_ts)+8))
+
+  p <- ggplot(df_long, aes(x = date, y = Value)) +
+        geom_line(aes(color = State, size = State, alpha = State)) +
+        labs(x = "Data", y = "") +
+        theme_minimal() +
+        ylim(c(-2, 8)) +
+        scale_color_manual(values = state_colors) +
+        scale_size_manual(values = state_sizes) +
+        scale_alpha_manual(values = state_alphas) +
+        theme(legend.position = "none",
+              text = element_text(family = "serif")) +
+        scale_x_date(date_labels = "%b/%Y", date_breaks = "8 month")
+  
+  plots[[i]] <- p
+  #ggplotly(p)
+}
+
+grid.arrange(grobs = plots, ncol = 2)
+```
+
+<br>
+
+# K=6
+
+```{r}
+cluster_assignments <- tsclust(df_final3,
+                               k=6,
+                               type = "h", 
+                               distance = "dtw",
+                               centroid = dba,
+                               control = hierarchical_control(method = 'ward.D'))
+
+clusters <- cluster_assignments@cluster
+library(plotly)
+
+par(mfrow = c(2,3))
+
+df_final4 <- df_final3
+df_final4 <- as.data.frame(df_final4)
+
+df_final4$cluster <- clusters
+
+plots <- list()
+
+for (i in 1:6) {
+  #df_final3 <- df_final3[,-1]
+  # Subset the time series for this cluster
+  cluster_ts <- as.data.frame(df_final4[df_final4$cluster == i, ])
+  
+  cluster_ts <- cluster_ts[,-1]
+  
+  cluster_ts <- cluster_ts %>%
+                  mutate_all(as.numeric)
+  
+  # Plot the time series
+  #matplot(t(cluster_ts), type = "l", main = paste("Cluster", i), lty = 1, lwd = 1)
+  #cluster_ts <- cluster_ts[,-1]
+  #str(cluster_ts)
+  # Calculate the mean of the time series for this cluster
+  mean_ts <- colMeans(cluster_ts, na.rm = TRUE)
+  
+  cluster_ts <- rbind(cluster_ts, mean_ts)
+  
+  rownames(cluster_ts)[nrow(cluster_ts)] <- "Mean"
+
+  # Remove the "Mean" row as it's not part of the time series
+  df <- cluster_ts
+  
+  # Move row names to the first column
+  df <- rownames_to_column(df, var = "State")
+  
+ 
+  
+  # Convert the dataframe to long format
+  df_long <- gather(df, key = "Week", value = "Value", -State)
+  
+  df_long$Week <- as.numeric(df_long$Week)
+  
+  
+  dados_temporais2 <- dados_temporais %>% 
+                        group_by(epi_week) %>% 
+                        summarise(date = max(date)) #-> dados_temporais2
+  
+  df_long <- left_join(df_long,
+               dados_temporais2,
+               by = c("Week" = "epi_week"))
+  
+  df_long$date <- as.Date(df_long$date, format="%d/%m/%Y")
+  
+  # Assigning unique colors to each state
+  state_colors <- setNames(rainbow(length(unique(df_long$State))), unique(df_long$State))
+
+  # Setting color for "RO" separately
+  state_colors["Mean"] <- "black"
+  
+  # Definindo a grossura de cada linha
+  state_sizes <- setNames(rep(.5, length(unique(df_long$State))), unique(df_long$State))
+
+  # Definindo a grossura para "RO" separadamente
+  state_sizes["Mean"] <- 1.1
+  
+  # Definindo a opacidade para cada estado
+  state_alphas <- setNames(rep(0.4, length(unique(df_long$State))), unique(df_long$State))
+
+  # Definindo a opacidade para "RO" separadamente
+  state_alphas["Mean"] <- 1
+  
+  #colnames(cluster_ts) <- c(9:(ncol(cluster_ts)+8))
+
+  p <- ggplot(df_long, aes(x = date, y = Value)) +
+        geom_line(aes(color = State, size = State, alpha = State)) +
+        labs(x = "Data", y = "") +
+        theme_minimal() +
+        ylim(c(-2, 8)) +
+        scale_color_manual(values = state_colors) +
+        scale_size_manual(values = state_sizes) +
+        scale_alpha_manual(values = state_alphas) +
+        theme(legend.position = "none",
+              text = element_text(family = "serif")) +
+        scale_x_date(date_labels = "%b/%Y", date_breaks = "8 month")
+  
+  plots[[i]] <- p
+  #ggplotly(p)
+}
+
+grid.arrange(grobs = plots, ncol = 2)
+```
 

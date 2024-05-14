@@ -1,0 +1,1877 @@
+---
+title: "TCC"
+output:
+  html_document:
+    code_download: true
+    theme: flatly
+    toc: true
+    toc_depth: 3
+    toc_float:
+      collapsed: true
+      smooth_scroll: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = F, message=F, fig.align = 'center', error = TRUE)
+library(tidyverse)
+library(zoo)
+library(dtwclust)
+library(caret)
+library(viridis)
+library(sf)
+library(caret)
+library(glmnet)
+library(gridExtra)
+```
+
+```{=html}
+<style>
+body{
+text-alig: justify;
+}
+</style>
+```
+
+```{r}
+theme_map <- function(...) {
+  theme_minimal() +
+    theme(
+      text = element_text(family = "Ubuntu Regular", color = "#22211d"),
+      # remove all axes
+      axis.line = element_blank(),
+      axis.text.x = element_blank(),
+      axis.text.y = element_blank(),
+      axis.ticks = element_blank(),
+      axis.title.x = element_blank(),
+      axis.title.y = element_blank(),
+      # add a subtle grid
+      panel.grid.major = element_line(color = "#ebebe5", size = 0.6),
+      panel.grid.minor = element_blank(),
+      plot.background = element_rect(fill = "#f5f5f2", color = NA), 
+      plot.margin = unit(c(1, 1, 0.5, 1), "cm"),
+      panel.border = element_blank(),
+      panel.background = element_rect(fill = "#f5f5f2", color = NA), 
+      panel.spacing = unit(c(-.1, 0.2, .2, 0.2), "cm"),
+      legend.background = element_rect(fill = "#f5f5f2", color = NA),
+      legend.title = element_text(size = 13),
+      legend.text = element_text(size = 8, hjust = 0, color = "#4e4d47"),
+      #
+      #plot.title = element_text(size = 16, hjust = 0.5, color = "#4e4d47"),
+      legend.position = "bottom",
+      plot.title = element_text(hjust = 0.5),
+      plot.subtitle = element_text(hjust = 0.5),
+      # plot.subtitle = element_text(size = 12, hjust = 0.5, color = "#4e4d47", 
+      #                              margin = margin(b = -0.1, 
+      #                                              t = -0.1, 
+      #                                              l = 2, 
+      #                                              unit = "cm"), 
+      #                             debug = F),
+      plot.caption = element_text(size = 9, 
+                                  hjust = .5, 
+                                  margin = margin(t = 0.2, 
+                                                  b = 0, 
+                                                  unit = "cm"), 
+                                  color = "#939184"),
+      ...
+    )
+}
+
+
+plot_mapa <- function(df_final) {
+  # Use scale_fill_manual para aplicar as cores
+  ggplot() +
+    geom_sf(data = df_final, aes(fill = Cluster, geometry = geom), color = NA, lwd = 0.0001, size = 0.0001, linewidth= 0.0001) +
+    coord_sf() + 
+    scale_fill_manual(
+      values = cores,
+      name = "Grupos",
+      guide = guide_legend(
+        direction = "horizontal",
+        keyheight = unit(2, units = "mm"), 
+        keywidth = unit(10/length(labels), units = "mm"),
+        title.position = 'top',
+        title.hjust = 0.5,
+        label.hjust = 0.5,
+        nrow = 1,
+        byrow = TRUE,
+        reverse = FALSE,
+        label.position = "bottom"
+      )) + 
+    labs(x = NULL,
+         y = NULL,
+         title = "Demografia Regional do Brasil",
+         subtitle = "Dynamic Time Warping, K=4",
+         caption = "Author: João L. Simon, Geometries: GeoBR") +
+    theme_map()
+}
+
+metodos_ml <- function(clusters) {
+  
+  var_num <- names(clusters)[9:13]
+  var_quali <- names(clusters)[c(2,8)]
+  
+  clusters[var_quali] <- lapply(clusters[var_quali], function(x) {as.factor(x)})
+  clusters[var_num] <- lapply(clusters[var_num], function(x) {as.numeric(x)})
+  
+  
+  clusters2 <- clusters[,c(2, 9:13)]
+  clusters2 <- na.omit(clusters2)
+  set.seed(324507)
+  
+  metodo <- data.frame()
+  acuracia <- data.frame()
+  proporcao <- data.frame()
+  grupo <- data.frame()
+  kappa <- data.frame()
+  
+  for (i in c(0.3, 0.5, 0.7,0.8, 0.9)) {
+    dados_treino <- clusters2[(1:(nrow(clusters2)*i)),]
+    dados_teste <- clusters2[(nrow(dados_treino)+1):nrow(clusters2),]
+    
+    controle <- trainControl(method = "cv", number = 5)
+    
+    for (j in c("Boosting", "RandomForest")) {
+      if (j == "RandomForest") {
+        modelo <- train(Cluster ~ ., data = dados_treino, method = "rf", trControl = controle, family = "binomial",  metric = "Accuracy")
+      } else if (j == "Boosting") {
+        modelo <- train(Cluster ~ ., data = dados_treino, method = "gbm", trControl = controle, verbose = FALSE)
+      }
+      predicoes <- predict(modelo, newdata = dados_teste)
+      dados_teste$default <- as.factor(dados_teste$Cluster)
+      matriz_confusao <- confusionMatrix(predicoes, dados_teste$Cluster)
+      
+      acuracia <- rbind(acuracia, round(matriz_confusao[["overall"]][["Accuracy"]],3))
+      metodo <- rbind(metodo, j)
+      proporcao <- rbind(proporcao, i)
+      kappa <- rbind(kappa, round(matriz_confusao[["overall"]][["Kappa"]],3))
+    }
+    
+    grupo <- cbind(acuracia, kappa, metodo, proporcao)
+  }
+  names(grupo) <- c("Acurácia", "Kappa", "Método", "Proporção Treino")
+  
+  return(knitr::kable(grupo))
+}
+```
+
+
+# Resumo
+
+As análises feitas abaixo seguem tendo como base a metodoliga aplicada em [Time series clustering of COVID-19 pandemic-related data](https://www.sciencedirect.com/science/article/pii/S2666764923000115). Nela, o pesquisador seguiu os seguintes passos:
+
+  - Obteve as séries temporais de casos diários em todos os países;
+
+  - Normalizou todas as séries;
+
+  - Ao invés de utilizar a série bruta normalizada, utilizou a média móvel centrada de 7 dias de cada país;
+
+  - Selecionou o algoritmo DTW Barycenter para formar os clusters;
+
+  - Utilizou o método não hierárquico para definir a quantidade de clusters;
+
+  - Avaliou os cluster atráves de alguns Índices de Validação de Clusters (CVI); (Coeficiente da Silhueta e Índice de Dunn)
+
+  - Como resultado final, pegou a média móvel de cada cluster e fez uma análise do comportamento da série e de alguns países que faziam parte do grupo formado;
+
+<br>
+
+Neste trabalho, foi seguida a seguinte medologia:
+
+  - Foram obtidas as séries **semanais** de casos diários em todos os **municípios de grande porte** (população > 100 mil habitantes) que constavam na fonte de dados mais recente até o momento da pandemia (Censo de 2010), totalizando 326 municípios de um total de 5570 ($n=326; N=5570$).
+
+  - Normalizamos todas as séries temporais; 
+  
+  $$z_{it}=\frac{x_{it}-\overline{x_{i}}}{s_i}; (t=1,2,..,T; i=1,2,..,n)$$ 
+
+  - Aplicamos o algoritmo **DTW Barycenter** nas séries, utilizando os K-Vizinhos mais próximos, utilizando K=(2,3,4,...,10). E então, utilizamos nos resultados alguns **Índices de Validação de Cluster (CVI)** como o **Coeficiente da Silhueta** e o **Índice de Dunn**, que retornaram K=4 como sendo o número ideal de Clusters;
+  
+  - Obtendo os clusters de cada município, classificamos essa coluna como sendo um fator;
+  
+  - Aplicamos 4 métodos de classificação utilizando como variáveis explicativas alguns índices de cada município (população(2010), IDHM(2010), GINI(2010), Resultado Eleições (2018)), pórem nenhum obteve uma acurácia maior do que 55%.
+
+
+
+# O que é Dynamic Time Warping?
+
+A técnica permite que você descubra como alinhar dois sinais que podem ser de durações diferentes. Ela basicamente lhe devolve duas coisas:
+
+  - Quais pontos em um dos sinais correspondem aos pontos do outro sinal;
+
+  - O quanto dois sinais são similares entre si;
+  
+  O DTW é um algoritmo que basicamente nos diz como alinhar dois sinais de durações diferentes.
+  
+  
+```{r echo=FALSE, fig.align='center'}
+knitr::include_graphics("Euclidean_vs_DTW.jpg")
+```
+
+
+
+<br>
+
+# Importando o banco de dados do Wesley Cota
+
+```{r}
+# Importando os dados diarios
+dados_temporais20 <- read.csv("cases-brazil-cities-time_2020.csv")
+dados_temporais21 <- read.csv("cases-brazil-cities-time_2021.csv")
+dados_temporais22 <- read.csv("cases-brazil-cities-time_2022.csv")
+
+# Juntando os 3 anos em um unico dataset
+dados_temporais <- rbind(dados_temporais20, dados_temporais21, dados_temporais22)
+
+# Removendo do environment os anos separados para liberar memoria
+rm(dados_temporais20)
+rm(dados_temporais21)
+rm(dados_temporais22)
+
+# Removendo as linhas de TOTAIS  e os Casos sem localização definida
+dados_temporais <- dados_temporais %>%
+                      filter(!grepl("TOTAL", city), !grepl("CASO SEM L", city))
+
+# Vamos considerar apenas municipios com +100mil habitantes (grande porte)
+
+## Para isso vamos ter que importar os dados pontuais do IBGE do censo de 2010
+dados_pontuais <- readxl::read_xlsx("Data_municipality_variables.xlsx")
+dados_pontuais <- dados_pontuais[-1,]
+
+dados_PIB <- readxl::read_xlsx("PIB dos Municípios - base de dados 2010-2021.xlsx")
+dados_PIB$`Código do Município` <- substr(dados_PIB$`Código do Município`, 1, 6)
+dados_PIB <- dados_PIB %>% filter(Ano==2019)
+
+dados_pontuais <- left_join(dados_pontuais,
+                            dados_PIB[,c(7,28:43)],
+                            by = c("Codmun6"="Código do Município"))
+
+## Vetor contendo apenas o código dos municipios com +100 habitantes
+muni_grande_porte <- dados_pontuais %>% filter(Population > 100000) %>% select(Codmun6)
+dados_temporais$ibgeID <- substr(dados_temporais$ibgeID, 1, 6) # removendo o ultimo digito do codigo do IBGE
+
+# Separando outro dataset apenas com os municipios que em 2010 tinham pop. > 100k habitantes
+dados_temporais2 <- dados_temporais %>% filter(ibgeID %in% muni_grande_porte$Codmun6)
+malha_brasil <- geobr::read_municipality(year = '2015')
+#load("TCC_v02_h.RData")
+```
+
+
+
+# Por MUNICÍPIOS
+
+```{r fig.align='center'}
+dados_semanais <- dados_temporais2 %>% 
+                          group_by(epi_week, city) %>% 
+                          summarise("newDeaths" = sum(newDeaths))
+
+
+# Separando a série temporal de novos casos de SP
+serie_semanal <- dados_semanais[dados_semanais$city == "Porto Alegre/RS", "newDeaths"]
+
+# Normalizando os dados da serie temporal para deixar as cidades padronizadas
+media <- mean(serie_semanal$newDeaths)
+desvio_padrao <- sd(serie_semanal$newDeaths)
+serie_semanal_padronizada <- (serie_semanal$newDeaths - media) / desvio_padrao
+
+
+
+plot.ts(serie_semanal_padronizada)
+
+#dados_temporais2[dados_temporais2$city == "São Félix do Xingu/PA",]
+```
+
+
+
+```{r fig.align='center'}
+dados_semanais_pd <- dados_semanais
+for (i in unique(dados_semanais$city)) {
+  serie_temporal <- dados_semanais[dados_semanais$city == i, "newDeaths"]
+
+  # Normalizando os dados da serie temporal para deixar as cidades padronizadas
+  media <- mean(serie_temporal$newDeaths)
+  desvio_padrao <- sd(serie_temporal$newDeaths)
+  serie_temporal$newDeaths <- (serie_temporal$newDeaths - media) / desvio_padrao
+  
+  # Substituir os dados padronizados de volta no data frame original
+  #dados_semanais_pd[dados_semanais_pd$city == i, "newDeaths"] <- serie_temporal
+  dados_semanais_pd$newDeaths[dados_semanais_pd$city == i] <- serie_temporal$newDeaths
+
+  #dados_semanais_pd <- dados_semanais %>% mutate(ifelse(city == i, serie_temporal$newDeaths, newDeaths))
+}
+
+
+# Dados reorganizados
+dados_semanais_reorganizados <- dados_semanais_pd %>%
+  pivot_wider(names_from = epi_week, values_from = newDeaths, values_fill = 0)
+
+
+df_final3 <- as.matrix(dados_semanais_reorganizados[,c(2:150)])
+rownames(df_final3) <- dados_semanais_reorganizados$city
+
+#agrupamento3 <- uhclust(df_final3)
+```
+
+<br>
+
+## DTW {.tabset}
+
+```{r fig.align='center'}
+## Rodando a clusterização com DTW Barycenter com K=(2,3,4,..,10)
+# cluster_assignments <- tsclust(df_final3, k = 2L:10L, seed = 8L, distance = "dtw_basic", centroid = dba, norm = "L2", window.size = 5L)
+
+
+# Compute the dissimilarity matrix using DTW
+# dist_matrix <- proxy::dist(df_final3, method = "DTW")
+# 
+# 
+# tsclust(series, type = "h", k = 4L, distance = "L2", trace = TRUE, control = hierarchical_control(method = diana))
+
+
+library(dendextend)
+
+cluster_assignments <- tsclust(df_final3,
+        type = "h", 
+        distance = "dtw",
+        centroid = dba,
+        window = 20L,
+        control = hierarchical_control(method = 'ward.D'))
+
+dend <- as.dendrogram(cluster_assignments)
+
+# Personalize as cores dos clusters e dos ramos
+
+
+#par(mfrow = c(2,2))
+par(mfrow = c(2,2))
+for (i in 3:10) {
+  # Subset the time series for this cluster
+ plot(cluster_assignments, cex = .1, main=paste0('K=',i))
+
+  rect.hclust(cluster_assignments, border ="red", k=i) 
+  
+  # Add the mean time series with a thicker line
+  #lines(mean_ts, lwd = 2, col = "red")
+}
+
+
+  
+  # Add the mean time series with a thicker line
+  #lines(mean_ts, lwd = 2, col = "red")
+ # change 'k' to the number of clusters you want
+```
+
+
+<br>
+
+```{r}
+cluster_assignments <- tsclust(df_final3,
+                               k=3:10,
+                               type = "h",
+                               distance = "dtw",
+                               centroid = dba,
+                               window = 20L,
+                               control = hierarchical_control(method = 'ward.D'))
+
+
+validacao_n_clusters <- sapply(cluster_assignments, cvi, type = "internal")
+
+
+validacao_n_clusters
+
+save.image("TCC_v04.RData")
+```
+
+
+<br>
+
+### K=3
+
+```{r}
+
+cluster_assignments <- tsclust(df_final3,
+                               k=3,
+                               type = "h", 
+                               distance = "dtw",
+                               centroid = dba,
+                               window = 20L,
+                               control = hierarchical_control(method = 'ward.D'))
+
+clusters <- cluster_assignments@cluster
+#library(plotly)
+par(mfrow = c(2,2))
+df_final4 <- df_final3
+df_final4 <- as.data.frame(df_final4)
+
+df_final4$cluster <- clusters
+
+plots <- list()
+
+for (i in 1:3) {
+  #df_final3 <- df_final3[,-1]
+  # Subset the time series for this cluster
+  cluster_ts <- as.data.frame(df_final4[df_final4$cluster == i, ])
+  
+  #cluster_ts <- cluster_ts[,-1]
+  
+  cluster_ts <- cluster_ts %>%
+                  mutate_all(as.numeric)
+  
+  # Plot the time series
+  #matplot(t(cluster_ts), type = "l", main = paste("Cluster", i), lty = 1, lwd = 1)
+  #cluster_ts <- cluster_ts[,-1]
+  #str(cluster_ts)
+  # Calculate the mean of the time series for this cluster
+  mean_ts <- colMeans(cluster_ts, na.rm = TRUE)
+  
+  cluster_ts <- rbind(cluster_ts, mean_ts)
+  
+  rownames(cluster_ts)[nrow(cluster_ts)] <- "Mean"
+
+  # Remove the "Mean" row as it's not part of the time series
+  df <- cluster_ts
+  
+  # Move row names to the first column
+  df <- rownames_to_column(df, var = "city")
+  
+ 
+  
+  # Convert the dataframe to long format
+  df_long <- gather(df, key = "Week", value = "Value", -city)
+  
+  df_long$Week <- as.numeric(df_long$Week)
+  
+  
+  dados_temporais2 <- dados_temporais %>% 
+                        group_by(epi_week) %>% 
+                        summarise(date = max(date)) #-> dados_temporais2
+  
+  df_long <- left_join(df_long,
+               dados_temporais2,
+               by = c("Week" = "epi_week"))
+  
+  df_long$date <- as.Date(df_long$date)
+  
+  df_long <- df_long %>% 
+                arrange(city)
+  
+  Mean <- df_long[df_long$city == "Mean",]
+  
+  df_long <- df_long[!df_long$city == "Mean",]
+  
+  df_long <- rbind(df_long, Mean)
+  
+  df_long <- df_long[!is.na(df_long$Week),]
+  
+  rownames(df_long) <- 1:nrow(df_long)
+  
+  # Assigning unique colors to each city
+  city_colors <- setNames(rainbow(length(unique(df_long$city))), unique(df_long$city))
+
+  # Setting color for "RO" separately
+  city_colors["Mean"] <- "black"
+  
+  # Definindo a grossura de cada linha
+  city_sizes <- setNames(rep(.5, length(unique(df_long$city))), unique(df_long$city))
+
+  # Definindo a grossura para "RO" separadamente
+  city_sizes["Mean"] <- 1.1
+  
+  if (i==1) {
+  # Definindo a opacidade para cada estado
+  city_alphas <- setNames(rep(0.05, length(unique(df_long$city))), unique(df_long$city))
+
+  # Definindo a opacidade para "RO" separadamente
+  city_alphas["Mean"] <- 2
+  } else {
+    city_alphas <- setNames(rep(0.12, length(unique(df_long$city))), unique(df_long$city))
+
+  # Definindo a opacidade para "RO" separadamente
+  city_alphas["Mean"] <- 2
+  }
+  
+  #colnames(cluster_ts) <- c(9:(ncol(cluster_ts)+8))
+
+  p <- ggplot(df_long, aes(x = date, y = Value)) +
+        geom_line(aes(color = city, size = city, alpha = city)) +
+        labs(x = "Data", y = "") +
+        theme_minimal() +
+        ylim(c(-2, 8)) +
+        scale_color_manual(values = city_colors) +
+        scale_size_manual(values = city_sizes) +
+        scale_alpha_manual(values = city_alphas) +
+        theme(legend.position = "none",
+              text = element_text(family = "serif")) +
+        scale_x_date(date_labels = "%b/%Y", date_breaks = "8 month")
+  
+  plots[[i]] <- p
+  #ggplotly(p)
+}
+
+grid.arrange(grobs = plots, ncol = 2)
+
+```
+
+<br>
+
+```{r}
+# Dataframe com os municipios e os resultado dos clusters
+dados_temporais2 <- dados_temporais %>% filter(ibgeID %in% muni_grande_porte$Codmun6)
+
+clusters <- data.frame("city" = rownames(df_final3), "Cluster" = cluster_assignments@cluster)
+
+clusters <- inner_join(clusters,
+                      dados_temporais2 %>% 
+                        select(city, ibgeID) %>% 
+                        group_by(city, ibgeID) %>% 
+                        summarise(),
+                      by = "city")
+
+clusters <- inner_join(clusters,
+                       dados_pontuais,
+                       by = c("ibgeID"="Codmun6"))
+
+var_num <- names(clusters)[c(7, 9:13,19:26)]
+var_quali <- names(clusters)[c(2,5,8, 14:18, 27:29)]
+  
+clusters[var_quali] <- lapply(clusters[var_quali], function(x) {as.factor(x)})
+clusters[var_num] <- lapply(clusters[var_num], function(x) {as.numeric(x)})
+
+for (var in var_num) {
+   plot(
+     ggplot(clusters, aes_string(x = "Cluster", y = paste("`", var, "`", sep = ""), fill = "Cluster")) +
+       geom_boxplot() +
+       labs(x = "Cluster", y = var) +
+       theme_minimal() +
+       theme(legend.position = "none")
+   )
+}
+
+for (var in var_quali) {
+   plot(
+     ggplot(clusters, aes_string(x = paste("`", var, "`", sep = ""), fill = "Cluster")) +
+       geom_bar() +
+       labs(x = "Cluster", y = var) +
+       theme_minimal() 
+   )
+}
+#head(clusters)
+```
+
+
+
+
+```{r}
+
+
+
+# Tratando os dados
+#colnames(dados)[1] <- c("code_muni")
+#colnames(malha_brasil)[1] <- c("code_muni")
+#malha_brasil$code_muni <- sapply(malha_brasil$code_muni, function(x) substr(x, 1, nchar(x) - 1))
+#colnames(dados)[7] <- 'IDH'
+df_final <- left_join(dados_pontuais,
+                       malha_brasil,
+                       by = c('Codmun6'='code_muni'))
+
+df_final <- left_join(df_final,
+                      clusters  %>% 
+                        select(ibgeID, Cluster),
+                      by = c('Codmun6'='ibgeID'))
+```
+
+```{r warning=F}
+df_final[is.na(df_final$Cluster), 'Cluster'] <- 0
+df_final$Cluster <- as.factor(df_final$Cluster)
+
+# Filtrando os dados para municípios com Cluster diferente de 0
+df_plot <- df_final[df_final$Cluster != "0", ]
+
+# Crie um vetor de cores com o número de clusters
+cores <- viridis::viridis(nlevels(df_plot$Cluster) - 1)
+
+# Adicione cinza para o cluster 0
+cores <- c("gray", cores)
+
+plot_mapa(df_final)
+```
+
+
+```{r}
+metodos_ml(clusters)
+```
+
+
+<br>
+
+### K=4
+
+```{r}
+
+cluster_assignments <- tsclust(df_final3,
+                               k=4,
+                               type = "h", 
+                               distance = "dtw",
+                               centroid = dba,
+                               window = 20L,
+                               control = hierarchical_control(method = 'ward.D'))
+
+clusters <- cluster_assignments@cluster
+#library(plotly)
+par(mfrow = c(2,2))
+df_final4 <- df_final3
+df_final4 <- as.data.frame(df_final4)
+
+df_final4$cluster <- clusters
+
+plots <- list()
+
+for (i in 1:4) {
+  #df_final3 <- df_final3[,-1]
+  # Subset the time series for this cluster
+  cluster_ts <- as.data.frame(df_final4[df_final4$cluster == i, ])
+  
+  #cluster_ts <- cluster_ts[,-1]
+  
+  cluster_ts <- cluster_ts %>%
+                  mutate_all(as.numeric)
+  
+  # Plot the time series
+  #matplot(t(cluster_ts), type = "l", main = paste("Cluster", i), lty = 1, lwd = 1)
+  #cluster_ts <- cluster_ts[,-1]
+  #str(cluster_ts)
+  # Calculate the mean of the time series for this cluster
+  mean_ts <- colMeans(cluster_ts, na.rm = TRUE)
+  
+  cluster_ts <- rbind(cluster_ts, mean_ts)
+  
+  rownames(cluster_ts)[nrow(cluster_ts)] <- "Mean"
+
+  # Remove the "Mean" row as it's not part of the time series
+  df <- cluster_ts
+  
+  # Move row names to the first column
+  df <- rownames_to_column(df, var = "city")
+  
+ 
+  
+  # Convert the dataframe to long format
+  df_long <- gather(df, key = "Week", value = "Value", -city)
+  
+  df_long$Week <- as.numeric(df_long$Week)
+  
+  
+  dados_temporais2 <- dados_temporais %>% 
+                        group_by(epi_week) %>% 
+                        summarise(date = max(date)) #-> dados_temporais2
+  
+  df_long <- left_join(df_long,
+               dados_temporais2,
+               by = c("Week" = "epi_week"))
+  
+  df_long$date <- as.Date(df_long$date)
+  
+  # Assigning unique colors to each city
+  city_colors <- setNames(rainbow(length(unique(df_long$city))), unique(df_long$city))
+
+  # Setting color for "RO" separately
+  city_colors["Mean"] <- "black"
+  
+  # Definindo a grossura de cada linha
+  city_sizes <- setNames(rep(.5, length(unique(df_long$city))), unique(df_long$city))
+
+  # Definindo a grossura para "RO" separadamente
+  city_sizes["Mean"] <- 1.1
+  
+  # Definindo a opacidade para cada estado
+  city_alphas <- setNames(rep(0.12, length(unique(df_long$city))), unique(df_long$city))
+
+  # Definindo a opacidade para "RO" separadamente
+  city_alphas["Mean"] <- 1
+  
+  #colnames(cluster_ts) <- c(9:(ncol(cluster_ts)+8))
+
+  p <- ggplot(df_long, aes(x = date, y = Value)) +
+        geom_line(aes(color = city, size = city, alpha = city)) +
+        labs(x = "Data", y = "") +
+        theme_minimal() +
+        ylim(c(-2, 8)) +
+        scale_color_manual(values = city_colors) +
+        scale_size_manual(values = city_sizes) +
+        scale_alpha_manual(values = city_alphas) +
+        theme(legend.position = "none",
+              text = element_text(family = "serif")) +
+        scale_x_date(date_labels = "%b/%Y", date_breaks = "8 month")
+  
+  plots[[i]] <- p
+  #ggplotly(p)
+}
+
+grid.arrange(grobs = plots, ncol = 2)
+
+```
+
+<br>
+```{r}
+# Dataframe com os municipios e os resultado dos clusters
+dados_temporais2 <- dados_temporais %>% filter(ibgeID %in% muni_grande_porte$Codmun6)
+
+clusters <- data.frame("city" = rownames(df_final3), "Cluster" = cluster_assignments@cluster)
+
+clusters <- inner_join(clusters,
+                      dados_temporais2 %>% 
+                        select(city, ibgeID) %>% 
+                        group_by(city, ibgeID) %>% 
+                        summarise(),
+                      by = "city")
+
+clusters <- inner_join(clusters,
+                       dados_pontuais,
+                       by = c("ibgeID"="Codmun6"))
+
+var_num <- names(clusters)[c(7, 9:13,19:26)]
+var_quali <- names(clusters)[c(2,5,8, 14:18, 27:29)]
+  
+clusters[var_quali] <- lapply(clusters[var_quali], function(x) {as.factor(x)})
+clusters[var_num] <- lapply(clusters[var_num], function(x) {as.numeric(x)})
+
+for (var in var_num) {
+   plot(
+     ggplot(clusters, aes_string(x = "Cluster", y = paste("`", var, "`", sep = ""), fill = "Cluster")) +
+       geom_boxplot() +
+       labs(x = "Cluster", y = var) +
+       theme_minimal() +
+       theme(legend.position = "none")
+   )
+}
+
+for (var in var_quali) {
+   plot(
+     ggplot(clusters, aes_string(x = paste("`", var, "`", sep = ""), fill = "Cluster")) +
+       geom_bar() +
+       labs(x = "Cluster", y = var) +
+       theme_minimal() 
+   )
+}
+
+#colnames(dados)[7] <- 'IDH'
+df_final <- left_join(dados_pontuais,
+                       malha_brasil,
+                       by = c('Codmun6'='code_muni'))
+
+df_final <- left_join(df_final,
+                      clusters  %>% 
+                        select(ibgeID, Cluster),
+                      by = c('Codmun6'='ibgeID'))
+
+df_final[is.na(df_final$Cluster), 'Cluster'] <- 0
+df_final$Cluster <- as.factor(df_final$Cluster)
+
+# Filtrando os dados para municípios com Cluster diferente de 0
+df_plot <- df_final[df_final$Cluster != "0", ]
+
+# Crie um vetor de cores com o número de clusters
+cores <- viridis::viridis(nlevels(df_plot$Cluster) - 1)
+
+# Adicione cinza para o cluster 0
+cores <- c("gray", cores)
+
+plot_mapa(df_final)
+```
+```{r}
+metodos_ml(clusters)
+```
+
+
+
+
+<br>
+
+### K=5
+
+```{r}
+
+cluster_assignments <- tsclust(df_final3,
+                               k=5,
+                               type = "h", 
+                               distance = "dtw",
+                               centroid = dba,
+                               window = 20L,
+                               control = hierarchical_control(method = 'ward.D'))
+
+clusters <- cluster_assignments@cluster
+#library(plotly)
+par(mfrow = c(2,3))
+df_final4 <- df_final3
+df_final4 <- as.data.frame(df_final4)
+
+df_final4$cluster <- clusters
+
+plots <- list()
+
+for (i in 1:5) {
+  #df_final3 <- df_final3[,-1]
+  # Subset the time series for this cluster
+  cluster_ts <- as.data.frame(df_final4[df_final4$cluster == i, ])
+  
+  #cluster_ts <- cluster_ts[,-1]
+  
+  cluster_ts <- cluster_ts %>%
+                  mutate_all(as.numeric)
+  
+  # Plot the time series
+  #matplot(t(cluster_ts), type = "l", main = paste("Cluster", i), lty = 1, lwd = 1)
+  #cluster_ts <- cluster_ts[,-1]
+  #str(cluster_ts)
+  # Calculate the mean of the time series for this cluster
+  mean_ts <- colMeans(cluster_ts, na.rm = TRUE)
+  
+  cluster_ts <- rbind(cluster_ts, mean_ts)
+  
+  rownames(cluster_ts)[nrow(cluster_ts)] <- "Mean"
+
+  # Remove the "Mean" row as it's not part of the time series
+  df <- cluster_ts
+  
+  # Move row names to the first column
+  df <- rownames_to_column(df, var = "city")
+  
+ 
+  
+  # Convert the dataframe to long format
+  df_long <- gather(df, key = "Week", value = "Value", -city)
+  
+  df_long$Week <- as.numeric(df_long$Week)
+  
+  
+  dados_temporais2 <- dados_temporais %>% 
+                        group_by(epi_week) %>% 
+                        summarise(date = max(date)) #-> dados_temporais2
+  
+  df_long <- left_join(df_long,
+               dados_temporais2,
+               by = c("Week" = "epi_week"))
+  
+  df_long$date <- as.Date(df_long$date)
+  
+  # Assigning unique colors to each city
+  city_colors <- setNames(rainbow(length(unique(df_long$city))), unique(df_long$city))
+
+  # Setting color for "RO" separately
+  city_colors["Mean"] <- "black"
+  
+  # Definindo a grossura de cada linha
+  city_sizes <- setNames(rep(.5, length(unique(df_long$city))), unique(df_long$city))
+
+  # Definindo a grossura para "RO" separadamente
+  city_sizes["Mean"] <- 1.1
+  
+  # Definindo a opacidade para cada estado
+  city_alphas <- setNames(rep(0.12, length(unique(df_long$city))), unique(df_long$city))
+
+  # Definindo a opacidade para "RO" separadamente
+  city_alphas["Mean"] <- 1
+  
+  #colnames(cluster_ts) <- c(9:(ncol(cluster_ts)+8))
+
+  p <- ggplot(df_long, aes(x = date, y = Value)) +
+        geom_line(aes(color = city, size = city, alpha = city)) +
+        labs(x = "Data", y = "") +
+        theme_minimal() +
+        ylim(c(-2, 8)) +
+        scale_color_manual(values = city_colors) +
+        scale_size_manual(values = city_sizes) +
+        scale_alpha_manual(values = city_alphas) +
+        theme(legend.position = "none",
+              text = element_text(family = "serif")) +
+        scale_x_date(date_labels = "%b/%Y", date_breaks = "8 month")
+  
+  plots[[i]] <- p
+  #ggplotly(p)
+}
+
+grid.arrange(grobs = plots, ncol = 2)
+```
+
+<br>
+
+```{r}
+# Dataframe com os municipios e os resultado dos clusters
+dados_temporais2 <- dados_temporais %>% filter(ibgeID %in% muni_grande_porte$Codmun6)
+
+clusters <- data.frame("city" = rownames(df_final3), "Cluster" = cluster_assignments@cluster)
+
+clusters <- inner_join(clusters,
+                      dados_temporais2 %>% 
+                        select(city, ibgeID) %>% 
+                        group_by(city, ibgeID) %>% 
+                        summarise(),
+                      by = "city")
+
+clusters <- inner_join(clusters,
+                       dados_pontuais,
+                       by = c("ibgeID"="Codmun6"))
+
+var_num <- names(clusters)[c(7, 9:13,19:26)]
+var_quali <- names(clusters)[c(2,5,8, 14:18, 27:29)]
+  
+clusters[var_quali] <- lapply(clusters[var_quali], function(x) {as.factor(x)})
+clusters[var_num] <- lapply(clusters[var_num], function(x) {as.numeric(x)})
+
+for (var in var_num) {
+   plot(
+     ggplot(clusters, aes_string(x = "Cluster", y = paste("`", var, "`", sep = ""), fill = "Cluster")) +
+       geom_boxplot() +
+       labs(x = "Cluster", y = var) +
+       theme_minimal() +
+       theme(legend.position = "none")
+   )
+}
+
+for (var in var_quali) {
+   plot(
+     ggplot(clusters, aes_string(x = paste("`", var, "`", sep = ""), fill = "Cluster")) +
+       geom_bar() +
+       labs(x = "Cluster", y = var) +
+       theme_minimal() 
+   )
+}
+
+df_final <- left_join(dados_pontuais,
+                       malha_brasil,
+                       by = c('Codmun6'='code_muni'))
+
+df_final <- left_join(df_final,
+                      clusters  %>% 
+                        select(ibgeID, Cluster),
+                      by = c('Codmun6'='ibgeID'))
+
+df_final[is.na(df_final$Cluster), 'Cluster'] <- 0
+df_final$Cluster <- as.factor(df_final$Cluster)
+
+# Filtrando os dados para municípios com Cluster diferente de 0
+df_plot <- df_final[df_final$Cluster != "0", ]
+
+# Crie um vetor de cores com o número de clusters
+cores <- viridis::viridis(nlevels(df_plot$Cluster) - 1)
+
+# Adicione cinza para o cluster 0
+cores <- c("gray", cores)
+
+plot_mapa(df_final)
+```
+
+```{r}
+metodos_ml(clusters)
+```
+
+
+
+<br>
+
+### K=6
+
+```{r}
+
+cluster_assignments <- tsclust(df_final3,
+                               k=6,
+                               type = "h", 
+                               distance = "dtw",
+                               centroid = dba,
+                               window = 20L,
+                               control = hierarchical_control(method = 'ward.D'))
+
+clusters <- cluster_assignments@cluster
+#library(plotly)
+par(mfrow = c(2,3))
+df_final4 <- df_final3
+df_final4 <- as.data.frame(df_final4)
+
+df_final4$cluster <- clusters
+
+plots <- list()
+
+for (i in 1:6) {
+  #df_final3 <- df_final3[,-1]
+  # Subset the time series for this cluster
+  cluster_ts <- as.data.frame(df_final4[df_final4$cluster == i, ])
+  
+  #cluster_ts <- cluster_ts[,-1]
+  
+  cluster_ts <- cluster_ts %>%
+                  mutate_all(as.numeric)
+  
+  # Plot the time series
+  #matplot(t(cluster_ts), type = "l", main = paste("Cluster", i), lty = 1, lwd = 1)
+  #cluster_ts <- cluster_ts[,-1]
+  #str(cluster_ts)
+  # Calculate the mean of the time series for this cluster
+  mean_ts <- colMeans(cluster_ts, na.rm = TRUE)
+  
+  cluster_ts <- rbind(cluster_ts, mean_ts)
+  
+  rownames(cluster_ts)[nrow(cluster_ts)] <- "Mean"
+
+  # Remove the "Mean" row as it's not part of the time series
+  df <- cluster_ts
+  
+  # Move row names to the first column
+  df <- rownames_to_column(df, var = "city")
+  
+ 
+  
+  # Convert the dataframe to long format
+  df_long <- gather(df, key = "Week", value = "Value", -city)
+  
+  df_long$Week <- as.numeric(df_long$Week)
+  
+  
+  dados_temporais2 <- dados_temporais %>% 
+                        group_by(epi_week) %>% 
+                        summarise(date = max(date)) #-> dados_temporais2
+  
+  df_long <- left_join(df_long,
+               dados_temporais2,
+               by = c("Week" = "epi_week"))
+  
+  df_long$date <- as.Date(df_long$date)
+  
+  # Assigning unique colors to each city
+  city_colors <- setNames(rainbow(length(unique(df_long$city))), unique(df_long$city))
+
+  # Setting color for "RO" separately
+  city_colors["Mean"] <- "black"
+  
+  # Definindo a grossura de cada linha
+  city_sizes <- setNames(rep(.5, length(unique(df_long$city))), unique(df_long$city))
+
+  # Definindo a grossura para "RO" separadamente
+  city_sizes["Mean"] <- 1.1
+  
+  # Definindo a opacidade para cada estado
+  city_alphas <- setNames(rep(0.12, length(unique(df_long$city))), unique(df_long$city))
+
+  # Definindo a opacidade para "RO" separadamente
+  city_alphas["Mean"] <- 1
+  
+  #colnames(cluster_ts) <- c(9:(ncol(cluster_ts)+8))
+
+  p <- ggplot(df_long, aes(x = date, y = Value)) +
+        geom_line(aes(color = city, size = city, alpha = city)) +
+        labs(x = "Data", y = "") +
+        theme_minimal() +
+        ylim(c(-2, 8)) +
+        scale_color_manual(values = city_colors) +
+        scale_size_manual(values = city_sizes) +
+        scale_alpha_manual(values = city_alphas) +
+        theme(legend.position = "none",
+              text = element_text(family = "serif")) +
+        scale_x_date(date_labels = "%b/%Y", date_breaks = "8 month")
+  
+  plots[[i]] <- p
+  #ggplotly(p)
+}
+
+grid.arrange(grobs = plots, ncol = 2)
+```
+
+<br>
+
+```{r}
+# Dataframe com os municipios e os resultado dos clusters
+dados_temporais2 <- dados_temporais %>% filter(ibgeID %in% muni_grande_porte$Codmun6)
+
+clusters <- data.frame("city" = rownames(df_final3), "Cluster" = cluster_assignments@cluster)
+
+clusters <- inner_join(clusters,
+                      dados_temporais2 %>% 
+                        select(city, ibgeID) %>% 
+                        group_by(city, ibgeID) %>% 
+                        summarise(),
+                      by = "city")
+
+clusters <- inner_join(clusters,
+                       dados_pontuais,
+                       by = c("ibgeID"="Codmun6"))
+
+var_num <- names(clusters)[c(7, 9:13,19:26)]
+var_quali <- names(clusters)[c(2,5,8, 14:18, 27:29)]
+  
+clusters[var_quali] <- lapply(clusters[var_quali], function(x) {as.factor(x)})
+clusters[var_num] <- lapply(clusters[var_num], function(x) {as.numeric(x)})
+
+for (var in var_num) {
+   plot(
+     ggplot(clusters, aes_string(x = "Cluster", y = paste("`", var, "`", sep = ""), fill = "Cluster")) +
+       geom_boxplot() +
+       labs(x = "Cluster", y = var) +
+       theme_minimal() +
+       theme(legend.position = "none")
+   )
+}
+
+for (var in var_quali) {
+   plot(
+     ggplot(clusters, aes_string(x = paste("`", var, "`", sep = ""), fill = "Cluster")) +
+       geom_bar() +
+       labs(x = "Cluster", y = var) +
+       theme_minimal() 
+   )
+}
+
+df_final <- left_join(dados_pontuais,
+                       malha_brasil,
+                       by = c('Codmun6'='code_muni'))
+
+df_final <- left_join(df_final,
+                      clusters  %>% 
+                        select(ibgeID, Cluster),
+                      by = c('Codmun6'='ibgeID'))
+
+df_final[is.na(df_final$Cluster), 'Cluster'] <- 0
+df_final$Cluster <- as.factor(df_final$Cluster)
+
+# Filtrando os dados para municípios com Cluster diferente de 0
+df_plot <- df_final[df_final$Cluster != "0", ]
+
+# Crie um vetor de cores com o número de clusters
+cores <- viridis::viridis(nlevels(df_plot$Cluster) - 1)
+
+# Adicione cinza para o cluster 0
+cores <- c("gray", cores)
+
+plot_mapa(df_final)
+```
+
+```{r}
+metodos_ml(clusters)
+```
+
+
+
+<br>
+
+### K=7
+
+```{r}
+
+cluster_assignments <- tsclust(df_final3,
+                               k=7,
+                               type = "h", 
+                               distance = "dtw",
+                               centroid = dba,
+                               window = 20L,
+                               control = hierarchical_control(method = 'ward.D'))
+
+clusters <- cluster_assignments@cluster
+#library(plotly)
+par(mfrow = c(2,4))
+df_final4 <- df_final3
+df_final4 <- as.data.frame(df_final4)
+
+df_final4$cluster <- clusters
+
+plots <- list()
+
+for (i in 1:7) {
+  #df_final3 <- df_final3[,-1]
+  # Subset the time series for this cluster
+  cluster_ts <- as.data.frame(df_final4[df_final4$cluster == i, ])
+  
+  #cluster_ts <- cluster_ts[,-1]
+  
+  cluster_ts <- cluster_ts %>%
+                  mutate_all(as.numeric)
+  
+  # Plot the time series
+  #matplot(t(cluster_ts), type = "l", main = paste("Cluster", i), lty = 1, lwd = 1)
+  #cluster_ts <- cluster_ts[,-1]
+  #str(cluster_ts)
+  # Calculate the mean of the time series for this cluster
+  mean_ts <- colMeans(cluster_ts, na.rm = TRUE)
+  
+  cluster_ts <- rbind(cluster_ts, mean_ts)
+  
+  rownames(cluster_ts)[nrow(cluster_ts)] <- "Mean"
+
+  # Remove the "Mean" row as it's not part of the time series
+  df <- cluster_ts
+  
+  # Move row names to the first column
+  df <- rownames_to_column(df, var = "city")
+  
+ 
+  
+  # Convert the dataframe to long format
+  df_long <- gather(df, key = "Week", value = "Value", -city)
+  
+  df_long$Week <- as.numeric(df_long$Week)
+  
+  
+  dados_temporais2 <- dados_temporais %>% 
+                        group_by(epi_week) %>% 
+                        summarise(date = max(date)) #-> dados_temporais2
+  
+  df_long <- left_join(df_long,
+               dados_temporais2,
+               by = c("Week" = "epi_week"))
+  
+  df_long$date <- as.Date(df_long$date)
+  
+  # Assigning unique colors to each city
+  city_colors <- setNames(rainbow(length(unique(df_long$city))), unique(df_long$city))
+
+  # Setting color for "RO" separately
+  city_colors["Mean"] <- "black"
+  
+  # Definindo a grossura de cada linha
+  city_sizes <- setNames(rep(.5, length(unique(df_long$city))), unique(df_long$city))
+
+  # Definindo a grossura para "RO" separadamente
+  city_sizes["Mean"] <- 1.1
+  
+  # Definindo a opacidade para cada estado
+  city_alphas <- setNames(rep(0.12, length(unique(df_long$city))), unique(df_long$city))
+
+  # Definindo a opacidade para "RO" separadamente
+  city_alphas["Mean"] <- 1
+  
+  #colnames(cluster_ts) <- c(9:(ncol(cluster_ts)+8))
+
+  p <- ggplot(df_long, aes(x = date, y = Value)) +
+        geom_line(aes(color = city, size = city, alpha = city)) +
+        labs(x = "Data", y = "") +
+        theme_minimal() +
+        ylim(c(-2, 8)) +
+        scale_color_manual(values = city_colors) +
+        scale_size_manual(values = city_sizes) +
+        scale_alpha_manual(values = city_alphas) +
+        theme(legend.position = "none",
+              text = element_text(family = "serif")) +
+        scale_x_date(date_labels = "%b/%Y", date_breaks = "8 month")
+  
+  plots[[i]] <- p
+  #ggplotly(p)
+}
+
+grid.arrange(grobs = plots, ncol = 2)
+```
+ 
+<br> 
+
+```{r}
+# Dataframe com os municipios e os resultado dos clusters
+dados_temporais2 <- dados_temporais %>% filter(ibgeID %in% muni_grande_porte$Codmun6)
+
+clusters <- data.frame("city" = rownames(df_final3), "Cluster" = cluster_assignments@cluster)
+
+clusters <- inner_join(clusters,
+                      dados_temporais2 %>% 
+                        select(city, ibgeID) %>% 
+                        group_by(city, ibgeID) %>% 
+                        summarise(),
+                      by = "city")
+
+clusters <- inner_join(clusters,
+                       dados_pontuais,
+                       by = c("ibgeID"="Codmun6"))
+
+var_num <- names(clusters)[c(7, 9:13,19:26)]
+var_quali <- names(clusters)[c(2,5,8, 14:18, 27:29)]
+  
+clusters[var_quali] <- lapply(clusters[var_quali], function(x) {as.factor(x)})
+clusters[var_num] <- lapply(clusters[var_num], function(x) {as.numeric(x)})
+
+for (var in var_num) {
+   plot(
+     ggplot(clusters, aes_string(x = "Cluster", y = paste("`", var, "`", sep = ""), fill = "Cluster")) +
+       geom_boxplot() +
+       labs(x = "Cluster", y = var) +
+       theme_minimal() +
+       theme(legend.position = "none")
+   )
+}
+
+for (var in var_quali) {
+   plot(
+     ggplot(clusters, aes_string(x = paste("`", var, "`", sep = ""), fill = "Cluster")) +
+       geom_bar() +
+       labs(x = "Cluster", y = var) +
+       theme_minimal() 
+   )
+}
+
+df_final <- left_join(dados_pontuais,
+                       malha_brasil,
+                       by = c('Codmun6'='code_muni'))
+
+df_final <- left_join(df_final,
+                      clusters  %>% 
+                        select(ibgeID, Cluster),
+                      by = c('Codmun6'='ibgeID'))
+
+df_final[is.na(df_final$Cluster), 'Cluster'] <- 0
+df_final$Cluster <- as.factor(df_final$Cluster)
+
+# Filtrando os dados para municípios com Cluster diferente de 0
+df_plot <- df_final[df_final$Cluster != "0", ]
+
+# Crie um vetor de cores com o número de clusters
+cores <- viridis::viridis(nlevels(df_plot$Cluster) - 1)
+
+# Adicione cinza para o cluster 0
+cores <- c("gray", cores)
+
+plot_mapa(df_final)
+```
+
+```{r}
+metodos_ml(clusters)
+```
+
+
+<br>
+
+### K=8
+
+```{r}
+
+cluster_assignments <- tsclust(df_final3,
+                               k=8,
+                               type = "h", 
+                               distance = "dtw",
+                               centroid = dba,
+                               window = 20L,
+                               control = hierarchical_control(method = 'ward.D'))
+
+clusters <- cluster_assignments@cluster
+#library(plotly)
+par(mfrow = c(2,4))
+df_final4 <- df_final3
+df_final4 <- as.data.frame(df_final4)
+
+df_final4$cluster <- clusters
+
+plots <- list()
+
+for (i in 1:8) {
+  #df_final3 <- df_final3[,-1]
+  # Subset the time series for this cluster
+  cluster_ts <- as.data.frame(df_final4[df_final4$cluster == i, ])
+  
+  #cluster_ts <- cluster_ts[,-1]
+  
+  cluster_ts <- cluster_ts %>%
+                  mutate_all(as.numeric)
+  
+  # Plot the time series
+  #matplot(t(cluster_ts), type = "l", main = paste("Cluster", i), lty = 1, lwd = 1)
+  #cluster_ts <- cluster_ts[,-1]
+  #str(cluster_ts)
+  # Calculate the mean of the time series for this cluster
+  mean_ts <- colMeans(cluster_ts, na.rm = TRUE)
+  
+  cluster_ts <- rbind(cluster_ts, mean_ts)
+  
+  rownames(cluster_ts)[nrow(cluster_ts)] <- "Mean"
+
+  # Remove the "Mean" row as it's not part of the time series
+  df <- cluster_ts
+  
+  # Move row names to the first column
+  df <- rownames_to_column(df, var = "city")
+  
+ 
+  
+  # Convert the dataframe to long format
+  df_long <- gather(df, key = "Week", value = "Value", -city)
+  
+  df_long$Week <- as.numeric(df_long$Week)
+  
+  
+  dados_temporais2 <- dados_temporais %>% 
+                        group_by(epi_week) %>% 
+                        summarise(date = max(date)) #-> dados_temporais2
+  
+  df_long <- left_join(df_long,
+               dados_temporais2,
+               by = c("Week" = "epi_week"))
+  
+  df_long$date <- as.Date(df_long$date)
+  
+  # Assigning unique colors to each city
+  city_colors <- setNames(rainbow(length(unique(df_long$city))), unique(df_long$city))
+
+  # Setting color for "RO" separately
+  city_colors["Mean"] <- "black"
+  
+  # Definindo a grossura de cada linha
+  city_sizes <- setNames(rep(.5, length(unique(df_long$city))), unique(df_long$city))
+
+  # Definindo a grossura para "RO" separadamente
+  city_sizes["Mean"] <- 1.1
+  
+  # Definindo a opacidade para cada estado
+  city_alphas <- setNames(rep(0.12, length(unique(df_long$city))), unique(df_long$city))
+
+  # Definindo a opacidade para "RO" separadamente
+  city_alphas["Mean"] <- 1
+  
+  #colnames(cluster_ts) <- c(9:(ncol(cluster_ts)+8))
+
+  p <- ggplot(df_long, aes(x = date, y = Value)) +
+        geom_line(aes(color = city, size = city, alpha = city)) +
+        labs(x = "Data", y = "") +
+        theme_minimal() +
+        ylim(c(-2, 8)) +
+        scale_color_manual(values = city_colors) +
+        scale_size_manual(values = city_sizes) +
+        scale_alpha_manual(values = city_alphas) +
+        theme(legend.position = "none",
+              text = element_text(family = "serif")) +
+        scale_x_date(date_labels = "%b/%Y", date_breaks = "8 month")
+  
+  plots[[i]] <- p
+  #ggplotly(p)
+}
+
+grid.arrange(grobs = plots, ncol = 2)
+```
+ 
+<br>
+
+```{r}
+# Dataframe com os municipios e os resultado dos clusters
+dados_temporais2 <- dados_temporais %>% filter(ibgeID %in% muni_grande_porte$Codmun6)
+
+clusters <- data.frame("city" = rownames(df_final3), "Cluster" = cluster_assignments@cluster)
+
+clusters <- inner_join(clusters,
+                      dados_temporais2 %>% 
+                        select(city, ibgeID) %>% 
+                        group_by(city, ibgeID) %>% 
+                        summarise(),
+                      by = "city")
+
+clusters <- inner_join(clusters,
+                       dados_pontuais,
+                       by = c("ibgeID"="Codmun6"))
+
+var_num <- names(clusters)[c(7, 9:13,19:26)]
+var_quali <- names(clusters)[c(2,5,8, 14:18, 27:29)]
+  
+clusters[var_quali] <- lapply(clusters[var_quali], function(x) {as.factor(x)})
+clusters[var_num] <- lapply(clusters[var_num], function(x) {as.numeric(x)})
+
+for (var in var_num) {
+   plot(
+     ggplot(clusters, aes_string(x = "Cluster", y = paste("`", var, "`", sep = ""), fill = "Cluster")) +
+       geom_boxplot() +
+       labs(x = "Cluster", y = var) +
+       theme_minimal() +
+       theme(legend.position = "none")
+   )
+}
+
+for (var in var_quali) {
+   plot(
+     ggplot(clusters, aes_string(x = paste("`", var, "`", sep = ""), fill = "Cluster")) +
+       geom_bar() +
+       labs(x = "Cluster", y = var) +
+       theme_minimal() 
+   )
+}
+
+df_final <- left_join(dados_pontuais,
+                       malha_brasil,
+                       by = c('Codmun6'='code_muni'))
+
+df_final <- left_join(df_final,
+                      clusters  %>% 
+                        select(ibgeID, Cluster),
+                      by = c('Codmun6'='ibgeID'))
+
+df_final[is.na(df_final$Cluster), 'Cluster'] <- 0
+df_final$Cluster <- as.factor(df_final$Cluster)
+
+# Filtrando os dados para municípios com Cluster diferente de 0
+df_plot <- df_final[df_final$Cluster != "0", ]
+
+# Crie um vetor de cores com o número de clusters
+cores <- viridis::viridis(nlevels(df_plot$Cluster) - 1)
+
+# Adicione cinza para o cluster 0
+cores <- c( '#DCDCDC', cores)
+
+plot_mapa(df_final)
+```
+
+```{r}
+metodos_ml(clusters)
+```
+
+
+<br> 
+
+### K=9
+
+```{r}
+
+cluster_assignments <- tsclust(df_final3,
+                               k=9,
+                               type = "h", 
+                               distance = "dtw",
+                               centroid = dba,
+                               window = 20L,
+                               control = hierarchical_control(method = 'ward.D'))
+
+clusters <- cluster_assignments@cluster
+#library(plotly)
+par(mfrow = c(2,5))
+df_final4 <- df_final3
+df_final4 <- as.data.frame(df_final4)
+
+df_final4$cluster <- clusters
+
+plots <- list()
+
+for (i in 1:9) {
+  #df_final3 <- df_final3[,-1]
+  # Subset the time series for this cluster
+  cluster_ts <- as.data.frame(df_final4[df_final4$cluster == i, ])
+  
+  #cluster_ts <- cluster_ts[,-1]
+  
+  cluster_ts <- cluster_ts %>%
+                  mutate_all(as.numeric)
+  
+  # Plot the time series
+  #matplot(t(cluster_ts), type = "l", main = paste("Cluster", i), lty = 1, lwd = 1)
+  #cluster_ts <- cluster_ts[,-1]
+  #str(cluster_ts)
+  # Calculate the mean of the time series for this cluster
+  mean_ts <- colMeans(cluster_ts, na.rm = TRUE)
+  
+  cluster_ts <- rbind(cluster_ts, mean_ts)
+  
+  rownames(cluster_ts)[nrow(cluster_ts)] <- "Mean"
+
+  # Remove the "Mean" row as it's not part of the time series
+  df <- cluster_ts
+  
+  # Move row names to the first column
+  df <- rownames_to_column(df, var = "city")
+  
+ 
+  
+  # Convert the dataframe to long format
+  df_long <- gather(df, key = "Week", value = "Value", -city)
+  
+  df_long$Week <- as.numeric(df_long$Week)
+  
+  
+  dados_temporais2 <- dados_temporais %>% 
+                        group_by(epi_week) %>% 
+                        summarise(date = max(date)) #-> dados_temporais2
+  
+  df_long <- left_join(df_long,
+               dados_temporais2,
+               by = c("Week" = "epi_week"))
+  
+  df_long$date <- as.Date(df_long$date)
+  
+  # Assigning unique colors to each city
+  city_colors <- setNames(rainbow(length(unique(df_long$city))), unique(df_long$city))
+
+  # Setting color for "RO" separately
+  city_colors["Mean"] <- "black"
+  
+  # Definindo a grossura de cada linha
+  city_sizes <- setNames(rep(.5, length(unique(df_long$city))), unique(df_long$city))
+
+  # Definindo a grossura para "RO" separadamente
+  city_sizes["Mean"] <- 1.1
+  
+  # Definindo a opacidade para cada estado
+  city_alphas <- setNames(rep(0.12, length(unique(df_long$city))), unique(df_long$city))
+
+  # Definindo a opacidade para "RO" separadamente
+  city_alphas["Mean"] <- 1
+  
+  #colnames(cluster_ts) <- c(9:(ncol(cluster_ts)+8))
+
+  p <- ggplot(df_long, aes(x = date, y = Value)) +
+        geom_line(aes(color = city, size = city, alpha = city)) +
+        labs(x = "Data", y = "") +
+        theme_minimal() +
+        ylim(c(-2, 8)) +
+        scale_color_manual(values = city_colors) +
+        scale_size_manual(values = city_sizes) +
+        scale_alpha_manual(values = city_alphas) +
+        theme(legend.position = "none",
+              text = element_text(family = "serif")) +
+        scale_x_date(date_labels = "%b/%Y", date_breaks = "8 month")
+  
+  plots[[i]] <- p
+  #ggplotly(p)
+}
+
+grid.arrange(grobs = plots, ncol = 2)
+```
+
+<br> 
+
+```{r}
+# Dataframe com os municipios e os resultado dos clusters
+dados_temporais2 <- dados_temporais %>% filter(ibgeID %in% muni_grande_porte$Codmun6)
+
+clusters <- data.frame("city" = rownames(df_final3), "Cluster" = cluster_assignments@cluster)
+
+clusters <- inner_join(clusters,
+                      dados_temporais2 %>% 
+                        select(city, ibgeID) %>% 
+                        group_by(city, ibgeID) %>% 
+                        summarise(),
+                      by = "city")
+
+clusters <- inner_join(clusters,
+                       dados_pontuais,
+                       by = c("ibgeID"="Codmun6"))
+
+var_num <- names(clusters)[c(7, 9:13,19:26)]
+var_quali <- names(clusters)[c(2,5,8, 14:18, 27:29)]
+  
+clusters[var_quali] <- lapply(clusters[var_quali], function(x) {as.factor(x)})
+clusters[var_num] <- lapply(clusters[var_num], function(x) {as.numeric(x)})
+
+for (var in var_num) {
+   plot(
+     ggplot(clusters, aes_string(x = "Cluster", y = paste("`", var, "`", sep = ""), fill = "Cluster")) +
+       geom_boxplot() +
+       labs(x = "Cluster", y = var) +
+       theme_minimal() +
+       theme(legend.position = "none")
+   )
+}
+
+for (var in var_quali) {
+   plot(
+     ggplot(clusters, aes_string(x = paste("`", var, "`", sep = ""), fill = "Cluster")) +
+       geom_bar() +
+       labs(x = "Cluster", y = var) +
+       theme_minimal() 
+   )
+}
+
+df_final <- left_join(dados_pontuais,
+                       malha_brasil,
+                       by = c('Codmun6'='code_muni'))
+
+df_final <- left_join(df_final,
+                      clusters  %>% 
+                        select(ibgeID, Cluster),
+                      by = c('Codmun6'='ibgeID'))
+
+df_final[is.na(df_final$Cluster), 'Cluster'] <- 0
+df_final$Cluster <- as.factor(df_final$Cluster)
+
+# Filtrando os dados para municípios com Cluster diferente de 0
+df_plot <- df_final[df_final$Cluster != "0", ]
+
+# Crie um vetor de cores com o número de clusters
+cores <- viridis::viridis(nlevels(df_plot$Cluster) - 1)
+
+# Adicione cinza para o cluster 0
+cores <- c("gray", cores)
+
+plot_mapa(df_final)
+```
+
+```{r}
+metodos_ml(clusters)
+```
+
+<br>
+
+### K=10
+
+```{r}
+
+cluster_assignments <- tsclust(df_final3,
+                               k=10,
+                               type = "h", 
+                               distance = "dtw",
+                               centroid = dba,
+                               window = 20L,
+                               control = hierarchical_control(method = 'ward.D'))
+
+clusters <- cluster_assignments@cluster
+#library(plotly)
+par(mfrow = c(2,5))
+df_final4 <- df_final3
+df_final4 <- as.data.frame(df_final4)
+
+df_final4$cluster <- clusters
+
+plots <- list()
+
+for (i in 1:10) {
+  #df_final3 <- df_final3[,-1]
+  # Subset the time series for this cluster
+  cluster_ts <- as.data.frame(df_final4[df_final4$cluster == i, ])
+  
+  #cluster_ts <- cluster_ts[,-1]
+  
+  cluster_ts <- cluster_ts %>%
+                  mutate_all(as.numeric)
+  
+  # Plot the time series
+  #matplot(t(cluster_ts), type = "l", main = paste("Cluster", i), lty = 1, lwd = 1)
+  #cluster_ts <- cluster_ts[,-1]
+  #str(cluster_ts)
+  # Calculate the mean of the time series for this cluster
+  mean_ts <- colMeans(cluster_ts, na.rm = TRUE)
+  
+  cluster_ts <- rbind(cluster_ts, mean_ts)
+  
+  rownames(cluster_ts)[nrow(cluster_ts)] <- "Mean"
+
+  # Remove the "Mean" row as it's not part of the time series
+  df <- cluster_ts
+  
+  # Move row names to the first column
+  df <- rownames_to_column(df, var = "city")
+  
+ 
+  
+  # Convert the dataframe to long format
+  df_long <- gather(df, key = "Week", value = "Value", -city)
+  
+  df_long$Week <- as.numeric(df_long$Week)
+  
+  
+  dados_temporais2 <- dados_temporais %>% 
+                        group_by(epi_week) %>% 
+                        summarise(date = max(date)) #-> dados_temporais2
+  
+  df_long <- left_join(df_long,
+               dados_temporais2,
+               by = c("Week" = "epi_week"))
+  
+  df_long$date <- as.Date(df_long$date)
+  
+  # Assigning unique colors to each city
+  city_colors <- setNames(rainbow(length(unique(df_long$city))), unique(df_long$city))
+
+  # Setting color for "RO" separately
+  city_colors["Mean"] <- "black"
+  
+  # Definindo a grossura de cada linha
+  city_sizes <- setNames(rep(.5, length(unique(df_long$city))), unique(df_long$city))
+
+  # Definindo a grossura para "RO" separadamente
+  city_sizes["Mean"] <- 1.1
+  
+  # Definindo a opacidade para cada estado
+  city_alphas <- setNames(rep(0.12, length(unique(df_long$city))), unique(df_long$city))
+
+  # Definindo a opacidade para "RO" separadamente
+  city_alphas["Mean"] <- 1
+  
+  #colnames(cluster_ts) <- c(9:(ncol(cluster_ts)+8))
+
+  p <- ggplot(df_long, aes(x = date, y = Value)) +
+        geom_line(aes(color = city, size = city, alpha = city)) +
+        labs(x = "Data", y = "") +
+        theme_minimal() +
+        ylim(c(-2, 8)) +
+        scale_color_manual(values = city_colors) +
+        scale_size_manual(values = city_sizes) +
+        scale_alpha_manual(values = city_alphas) +
+        theme(legend.position = "none",
+              text = element_text(family = "serif")) +
+        scale_x_date(date_labels = "%b/%Y", date_breaks = "8 month")
+  
+  plots[[i]] <- p
+  #ggplotly(p)
+}
+
+grid.arrange(grobs = plots, ncol = 2)
+```
+
+<br>
+
+```{r}
+# Dataframe com os municipios e os resultado dos clusters
+dados_temporais2 <- dados_temporais %>% filter(ibgeID %in% muni_grande_porte$Codmun6)
+
+clusters <- data.frame("city" = rownames(df_final3), "Cluster" = cluster_assignments@cluster)
+
+clusters <- inner_join(clusters,
+                      dados_temporais2 %>% 
+                        select(city, ibgeID) %>% 
+                        group_by(city, ibgeID) %>% 
+                        summarise(),
+                      by = "city")
+
+clusters <- inner_join(clusters,
+                       dados_pontuais,
+                       by = c("ibgeID"="Codmun6"))
+
+var_num <- names(clusters)[c(7, 9:13,19:26)]
+var_quali <- names(clusters)[c(2,5,8, 14:18, 27:29)]
+  
+clusters[var_quali] <- lapply(clusters[var_quali], function(x) {as.factor(x)})
+clusters[var_num] <- lapply(clusters[var_num], function(x) {as.numeric(x)})
+
+for (var in var_num) {
+   plot(
+     ggplot(clusters, aes_string(x = "Cluster", y = paste("`", var, "`", sep = ""), fill = "Cluster")) +
+       geom_boxplot() +
+       labs(x = "Cluster", y = var) +
+       theme_minimal() +
+       theme(legend.position = "none")
+   )
+}
+
+for (var in var_quali) {
+   plot(
+     ggplot(clusters, aes_string(x = paste("`", var, "`", sep = ""), fill = "Cluster")) +
+       geom_bar() +
+       labs(x = "Cluster", y = var) +
+       theme_minimal() 
+   )
+}
+
+df_final <- left_join(dados_pontuais,
+                       malha_brasil,
+                       by = c('Codmun6'='code_muni'))
+
+df_final <- left_join(df_final,
+                      clusters  %>% 
+                        select(ibgeID, Cluster),
+                      by = c('Codmun6'='ibgeID'))
+
+df_final[is.na(df_final$Cluster), 'Cluster'] <- 0
+df_final$Cluster <- as.factor(df_final$Cluster)
+
+# Filtrando os dados para municípios com Cluster diferente de 0
+df_plot <- df_final[df_final$Cluster != "0", ]
+
+# Crie um vetor de cores com o número de clusters
+cores <- viridis::viridis(nlevels(df_plot$Cluster) - 1)
+
+# Adicione cinza para o cluster 0
+cores <- c("gray", cores)
+
+plot_mapa(df_final)
+```
+
+<br>
+
+```{r}
+metodos_ml(clusters)
+```
+
+
+<br>
+
+
