@@ -1,4 +1,4 @@
-# README: Análise Não Supervisionada das Séries Temporais de COVID-19 no Brasil  
+# Análise Não Supervisionada das Séries Temporais de COVID-19 no Brasil  
 
 **Trabalho de Conclusão de Curso (TCC)**  
 **Autor:** João Lucas Simon  
