@@ -58,9 +58,6 @@ Se usar este trabalho, cite:
 - **Contato:** [joao.simon@email.com] (substitua pelo seu e-mail).  
 
 --- 
-
-**Licença:** [MIT](https://choosealicense.com/licenses/mit/) (ou outra de sua preferência).  
-
---- 
+ 
 
 🔍 **Dúvidas?** Consulte o PDF do TCC ou a pasta `/docs/` para detalhes metodológicos!
