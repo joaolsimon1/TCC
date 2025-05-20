@@ -31,29 +31,6 @@ Este estudo analisa a evolução da COVID-19 em municípios brasileiros com mais
 
 ---
 
-## 🚀 **Como Reproduzir a Análise**  
-1. **Pré-requisitos:**  
-   - R (>= 4.0.0) e RStudio (recomendado).  
-   - Pacotes listados em `requirements.R` (use `install.packages()`).  
-
-2. **Passos:**  
-   ```bash
-   # Clone o repositório
-   git clone https://github.com/seu-usuario/tcc-covid19-clustering.git
-   cd tcc-covid19-clustering
-
-   # Execute os scripts em ordem:
-   Rscript notebooks/01_preprocessing.R
-   Rscript notebooks/02_clustering.R
-   Rscript notebooks/03_analysis.R
-   ```
-
-3. **Saídas:**  
-   - Gráficos interativos (HTML/PDF) em `/outputs/`.  
-   - Tabelas com resultados estatísticos em `/outputs/stats/`.  
-
----
-
 ## 📊 **Principais Resultados**  
 - **Agrupamento de Casos:** 6 clusters com padrões temporais distintos (ex.: picos prematuros vs. evolução lenta).  
 - **Agrupamento de Óbitos:** 5 clusters, com diferenças significativas em IDHM e votação (teste de Dunn, *p* < 0.05).  
