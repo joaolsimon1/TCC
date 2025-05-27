@@ -55,7 +55,7 @@ Se usar este trabalho, cite:
 
 ## 🤝 **Contribuições e Contato**  
 - **Issues:** Sinta-se à vontade para abrir *issues* no GitHub com dúvidas ou sugestões.  
-- **Contato:** [joao.simon@email.com] (substitua pelo seu e-mail).  
+- **Contato:** [joaolsimon@gmail.com]
 
 --- 
  
